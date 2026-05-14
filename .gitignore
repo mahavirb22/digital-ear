@@ -1,0 +1,51 @@
+# Node modules
+node_modules/
+npm-debug.log
+yarn-error.log
+yarn-debug.log
+
+# Environment variables
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Frontend Build
+client/dist/
+client/build/
+.eslintcache
+
+# Python (ML Service)
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+env/
+.venv/
+# Ignore locally trained models and scalers (dynamically generated)
+server/ml/*.pkl
+
+# OS Files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# IDEs and Editors
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Explicit User Exclusions
+stitch_assets/
+stitch_imports/
+imports/
+runcmd.txt
