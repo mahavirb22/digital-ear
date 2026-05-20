@@ -11,6 +11,7 @@ import Signup from './pages/Signup';
 import ForgotPassword from './pages/ForgotPassword';
 import VerifyOTP from './pages/VerifyOTP';
 import ResetPassword from './pages/ResetPassword';
+import MotorTwin from './pages/MotorTwin';
 import { AuthContext } from './context/AuthContext';
 
 // Redirect authenticated users away from auth pages
@@ -56,6 +57,8 @@ function App() {
         <Route path="/device/:deviceId" element={<ProtectedRoute><DeviceDetail /></ProtectedRoute>} />
         <Route path="/notifications" element={<ProtectedRoute><Notifications /></ProtectedRoute>} />
         <Route path="/connect-device" element={<ProtectedRoute><ConnectDevice /></ProtectedRoute>} />
+        <Route path="/motor-twin" element={<ProtectedRoute><MotorTwin /></ProtectedRoute>} />
+        <Route path="/motor-twin/:deviceId" element={<ProtectedRoute><MotorTwin /></ProtectedRoute>} />
 
         {/* Catch-all: redirect unknown routes to login */}
         <Route path="*" element={<Navigate to="/login" />} />

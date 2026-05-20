@@ -1,0 +1,360 @@
+/* ──────────────────────────────────────────────────────────
+   Motor Digital Twin — Custom Styles
+   Imported by MotorTwin.jsx
+   ────────────────────────────────────────────────────────── */
+
+/* ── Design Tokens ── */
+:root {
+  --motor-bg: #0A0E1A;
+  --motor-surface: rgba(25, 27, 35, 0.4);
+  --motor-surface-solid: #191b23;
+  --motor-primary: #adc6ff;
+  --motor-primary-dim: rgba(173, 198, 255, 0.15);
+  --motor-error: #ffb4ab;
+  --motor-error-dim: rgba(255, 180, 171, 0.15);
+  --motor-tertiary: #ffb786;
+  --motor-tertiary-dim: rgba(255, 183, 134, 0.15);
+  --motor-on-surface: #e1e2ec;
+  --motor-outline: #8c909f;
+  --motor-border: rgba(255, 255, 255, 0.1);
+  --motor-border-hover: rgba(255, 255, 255, 0.2);
+  --motor-green: #7dd87d;
+  --motor-green-dim: rgba(125, 216, 125, 0.15);
+  --motor-yellow: #e8c44d;
+  --motor-yellow-dim: rgba(232, 196, 77, 0.15);
+  --motor-grid-line: rgba(173, 198, 255, 0.04);
+  --motor-grid-line-bright: rgba(173, 198, 255, 0.07);
+}
+
+/* ── Page Container ── */
+.motor-twin-page {
+  min-height: 100vh;
+  background: var(--motor-bg);
+  position: relative;
+  overflow-x: hidden;
+}
+
+.motor-twin-page::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 260px;
+  background: linear-gradient(
+    180deg,
+    rgba(173, 198, 255, 0.04) 0%,
+    transparent 100%
+  );
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* ── 3D Canvas Container ── */
+.motor-canvas-container {
+  position: relative;
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--motor-surface);
+  backdrop-filter: blur(12px);
+  border: 1px solid var(--motor-border);
+  min-height: 420px;
+}
+
+.motor-canvas-container::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(var(--motor-grid-line) 1px, transparent 1px),
+    linear-gradient(90deg, var(--motor-grid-line) 1px, transparent 1px);
+  background-size: 32px 32px;
+  animation: motorGridScroll 20s linear infinite;
+  pointer-events: none;
+  z-index: 0;
+  opacity: 0.8;
+}
+
+.motor-canvas-container::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(
+    ellipse at center,
+    transparent 40%,
+    var(--motor-bg) 100%
+  );
+  pointer-events: none;
+  z-index: 1;
+}
+
+.motor-canvas-container > * {
+  position: relative;
+  z-index: 2;
+}
+
+/* ── Stats Grid ── */
+.motor-stats-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 16px;
+}
+
+@media (max-width: 1024px) {
+  .motor-stats-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 640px) {
+  .motor-stats-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ── Motor Card (Glass) ── */
+.motor-card {
+  background: var(--motor-surface);
+  backdrop-filter: blur(12px);
+  border: 1px solid var(--motor-border);
+  border-left: 3px solid var(--motor-primary);
+  border-radius: 8px;
+  padding: 16px;
+  position: relative;
+  overflow: hidden;
+  transition: transform 0.25s ease, box-shadow 0.25s ease, border-color 0.25s ease;
+}
+
+.motor-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 80px;
+  height: 100%;
+  background: linear-gradient(90deg, var(--motor-primary-dim), transparent);
+  opacity: 0;
+  transition: opacity 0.3s ease;
+  pointer-events: none;
+}
+
+.motor-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3), 0 0 0 1px var(--motor-border-hover);
+}
+
+.motor-card:hover::before {
+  opacity: 1;
+}
+
+/* Warning variant */
+.motor-card--warning {
+  border-left-color: var(--motor-tertiary);
+  box-shadow: 0 0 16px var(--motor-tertiary-dim);
+}
+
+.motor-card--warning::before {
+  background: linear-gradient(90deg, var(--motor-tertiary-dim), transparent);
+}
+
+/* Critical variant */
+.motor-card--critical {
+  border-left-color: var(--motor-error);
+  animation: statusPulse 2s ease-in-out infinite;
+}
+
+.motor-card--critical::before {
+  background: linear-gradient(90deg, var(--motor-error-dim), transparent);
+  opacity: 1;
+}
+
+/* ── Status Badge (Pill) ── */
+.motor-status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  border-radius: 9999px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-family: 'Inter', sans-serif;
+  border: 1px solid transparent;
+}
+
+.motor-status-badge::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+/* Normal */
+.motor-status-badge--normal {
+  color: var(--motor-green);
+  background: var(--motor-green-dim);
+  border-color: rgba(125, 216, 125, 0.25);
+}
+
+.motor-status-badge--normal::before {
+  background: var(--motor-green);
+  animation: statusPulse 3s ease-in-out infinite;
+}
+
+/* Warning */
+.motor-status-badge--warning {
+  color: var(--motor-tertiary);
+  background: var(--motor-tertiary-dim);
+  border-color: rgba(255, 183, 134, 0.25);
+}
+
+.motor-status-badge--warning::before {
+  background: var(--motor-tertiary);
+  animation: statusPulse 2s ease-in-out infinite;
+}
+
+/* Critical */
+.motor-status-badge--critical {
+  color: var(--motor-error);
+  background: var(--motor-error-dim);
+  border-color: rgba(255, 180, 171, 0.25);
+}
+
+.motor-status-badge--critical::before {
+  background: var(--motor-error);
+  animation: statusPulse 1s ease-in-out infinite;
+}
+
+/* ── Health Ring (SVG circular progress) ── */
+.motor-health-ring {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.motor-health-ring svg {
+  transform: rotate(-90deg);
+}
+
+.motor-health-ring__track {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.06);
+}
+
+.motor-health-ring__progress {
+  fill: none;
+  stroke-linecap: round;
+  transition: stroke-dashoffset 0.8s cubic-bezier(0.4, 0, 0.2, 1),
+              stroke 0.4s ease;
+  animation: ringProgress 1s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+}
+
+.motor-health-ring__label {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+
+/* ── Side Panel ── */
+.motor-panel {
+  background: var(--motor-surface);
+  backdrop-filter: blur(12px);
+  border: 1px solid var(--motor-border);
+  border-radius: 8px;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  height: fit-content;
+}
+
+/* ── Value Change Flash ── */
+.motor-value-change {
+  animation: valueFadeIn 0.4s ease-out;
+}
+
+/* ── Loading Spinner (3D-style) ── */
+.motor-loading-spinner {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  border: 3px solid rgba(173, 198, 255, 0.1);
+  border-top-color: var(--motor-primary);
+  animation: spinnerRotate 0.8s linear infinite;
+  perspective: 800px;
+}
+
+.motor-loading-spinner::after {
+  content: '';
+  position: absolute;
+  inset: 4px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  border-top-color: rgba(173, 198, 255, 0.4);
+  animation: spinnerRotate 1.2s linear infinite reverse;
+}
+
+/* ══════════════════════════════════════════════
+   Keyframes
+   ══════════════════════════════════════════════ */
+
+@keyframes motorGridScroll {
+  0% {
+    background-position: 0 0;
+  }
+  100% {
+    background-position: 0 32px;
+  }
+}
+
+@keyframes statusPulse {
+  0%, 100% {
+    opacity: 0.5;
+    box-shadow: 0 0 0 0 transparent;
+  }
+  50% {
+    opacity: 1;
+    box-shadow: 0 0 12px rgba(255, 180, 171, 0.15);
+  }
+}
+
+@keyframes valueFadeIn {
+  0% {
+    opacity: 0.4;
+    transform: translateY(2px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes ringProgress {
+  0% {
+    stroke-dashoffset: 283;
+  }
+}
+
+@keyframes failureBlink {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.3;
+    color: var(--motor-error);
+    text-shadow: 0 0 8px rgba(255, 180, 171, 0.6);
+  }
+}
+
+@keyframes spinnerRotate {
+  to {
+    transform: rotate(360deg);
+  }
+}

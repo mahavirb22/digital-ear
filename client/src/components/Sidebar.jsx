@@ -36,6 +36,10 @@ const Sidebar = () => {
         <span className="material-symbols-outlined mr-sm text-[20px]">settings_input_component</span>
         Devices
       </NavLink>
+      <NavLink to="/motor-twin" className={navLinkClass} onClick={closeMobile}>
+        <span className="material-symbols-outlined mr-sm text-[20px]">3d_rotation</span>
+        3D Model
+      </NavLink>
     </>
   );
 

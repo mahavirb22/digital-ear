@@ -49,3 +49,7 @@ stitch_assets/
 stitch_imports/
 imports/
 runcmd.txt
+
+# Motor Resources
+motor_reference_images/
+motor.glb
