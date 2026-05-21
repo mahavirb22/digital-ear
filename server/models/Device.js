@@ -6,6 +6,8 @@ const deviceSchema = new mongoose.Schema({
   status: { type: String, enum: ['online', 'offline', 'anomaly'], default: 'offline' },
   lastSeen: { type: Date, default: null },
   registeredBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+  attachedMachine: { type: mongoose.Schema.Types.ObjectId, ref: 'Machine', default: null },
+  calibrationEndTime: { type: Date, default: null },
   registeredAt: { type: Date, default: Date.now }
 });
 

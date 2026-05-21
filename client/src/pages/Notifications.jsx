@@ -1,11 +1,25 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import useNotifications from '../hooks/useNotifications';
-import { acknowledgeNotification } from '../api';
+import { acknowledgeNotification, fetchMachines } from '../api';
 import toast from 'react-hot-toast';
 
 const Notifications = () => {
   const { notifications, loading } = useNotifications();
+  const [machines, setMachines] = useState([]);
   const [filter, setFilter] = useState('all');
+  const [selectedMachineFilter, setSelectedMachineFilter] = useState('all');
+
+  useEffect(() => {
+    const loadMachines = async () => {
+      try {
+        const data = await fetchMachines();
+        setMachines(data);
+      } catch (error) {
+        console.error('Failed to fetch machines for filtering', error);
+      }
+    };
+    loadMachines();
+  }, []);
 
   const handleAcknowledge = async (id) => {
     try {
@@ -16,10 +30,26 @@ const Notifications = () => {
     }
   };
 
-  const filteredNotifications = notifications.filter(n => {
-    if (filter === 'unread') return !n.acknowledged;
-    if (filter === 'critical') return n.severity === 'critical';
-    if (filter === 'warning') return n.severity === 'warning';
+  const getMachineName = (deviceId) => {
+    const machine = machines.find(m => m.deviceAttached && m.deviceAttached.deviceId === deviceId);
+    return machine ? machine.name : null;
+  };
+
+  const filteredNotifications = notifications.filter(notif => {
+    // 1. Status Filter
+    if (filter === 'unread' && notif.acknowledged) return false;
+    if (filter === 'critical' && notif.severity !== 'critical') return false;
+    if (filter === 'warning' && notif.severity !== 'warning') return false;
+
+    // 2. Machine Filter
+    if (selectedMachineFilter !== 'all') {
+      if (selectedMachineFilter === 'unassigned') {
+        const hasMachine = machines.some(m => m.deviceAttached?.deviceId === notif.deviceId);
+        if (hasMachine) return false;
+      } else {
+        if (notif.deviceId !== selectedMachineFilter) return false;
+      }
+    }
     return true;
   });
 
@@ -30,21 +60,44 @@ const Notifications = () => {
         <p className="font-body text-body text-on-surface-variant">Real-time acoustic event telemetry.</p>
       </div>
 
-      {/* Filter Tabs */}
-      <div className="flex gap-sm mb-lg border-b border-white/10 pb-sm overflow-x-auto no-scrollbar">
-        {['all', 'unread', 'critical', 'warning'].map(f => (
-          <button
-            key={f}
-            onClick={() => setFilter(f)}
-            className={`px-md py-sm rounded-DEFAULT font-label text-label uppercase tracking-widest border transition-colors whitespace-nowrap ${
-              filter === f 
-              ? 'bg-primary-container text-on-primary-container border-transparent' 
-              : 'bg-transparent text-on-surface-variant hover:text-on-surface hover:bg-white/5 border-white/10'
-            }`}
+      <div className="grid grid-cols-1 lg:grid-cols-4 gap-gutter mb-lg">
+        {/* Severity Filter Tabs */}
+        <div className="lg:col-span-2 flex flex-col gap-xs">
+          <span className="font-label text-label uppercase tracking-widest text-outline text-[10px]">Filter by Status</span>
+          <div className="flex gap-sm pb-xs overflow-x-auto no-scrollbar">
+            {['all', 'unread', 'critical', 'warning'].map(f => (
+              <button
+                key={f}
+                onClick={() => setFilter(f)}
+                className={`px-md py-sm rounded-DEFAULT font-label text-label uppercase tracking-widest border transition-colors whitespace-nowrap ${
+                  filter === f 
+                  ? 'bg-primary-container text-on-primary-container border-transparent' 
+                  : 'bg-transparent text-on-surface-variant hover:text-on-surface hover:bg-white/5 border-white/10'
+                }`}
+              >
+                {f}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Machine Filter Dropdown */}
+        <div className="lg:col-span-2 flex flex-col gap-xs">
+          <span className="font-label text-label uppercase tracking-widest text-outline text-[10px]">Filter by Machine</span>
+          <select
+            value={selectedMachineFilter}
+            onChange={(e) => setSelectedMachineFilter(e.target.value)}
+            className="bg-surface-container-low border border-white/10 rounded-lg p-sm text-on-surface outline-none focus:border-primary w-full h-[38px] text-body-sm"
           >
-            {f}
-          </button>
-        ))}
+            <option value="all">All Machines & Devices</option>
+            {machines.map(m => (
+              <option key={m._id} value={m.deviceAttached?.deviceId || 'none'} disabled={!m.deviceAttached}>
+                {m.name} {m.deviceAttached ? `(${m.deviceAttached.deviceId})` : '(No Sensor)'}
+              </option>
+            ))}
+            <option value="unassigned">Unassigned Telemetry</option>
+          </select>
+        </div>
       </div>
 
       {/* Notifications Feed */}
@@ -67,45 +120,48 @@ const Notifications = () => {
             ))}
           </>
         ) : filteredNotifications.length > 0 ? (
-          filteredNotifications.map(notif => (
-            <div 
-              key={notif._id} 
-              className={`glass-panel rounded-lg p-md flex flex-col sm:flex-row sm:items-start gap-md group hover:bg-white/5 transition-colors border-l-4 ${
-                notif.severity === 'critical' ? 'border-l-error' : 'border-l-tertiary'
-              } ${notif.acknowledged ? 'opacity-60' : ''}`}
-            >
-              <div className="flex items-start gap-md w-full">
-                <div className="flex-shrink-0 pt-xs">
-                  <span className={`material-symbols-outlined ${
-                    notif.severity === 'critical' ? 'text-error pulse-danger' : 'text-tertiary pulse-warning'
-                  }`} style={{ fontVariationSettings: "'FILL' 1" }}>
-                    {notif.severity === 'critical' ? 'error' : 'warning'}
-                  </span>
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-sm mb-xs flex-wrap">
-                    <span className="font-data-sm text-data-sm text-on-surface px-sm py-xs bg-surface-container-high rounded border border-white/10 uppercase tracking-wider">
-                      {notif.deviceId}
-                    </span>
-                    <span className="font-data-sm text-data-sm text-outline-variant whitespace-nowrap">
-                      {new Date(notif.timestamp).toLocaleString()}
+          filteredNotifications.map(notif => {
+            const machineName = getMachineName(notif.deviceId);
+            return (
+              <div 
+                key={notif._id} 
+                className={`glass-panel rounded-lg p-md flex flex-col sm:flex-row sm:items-start gap-md group hover:bg-white/5 transition-colors border-l-4 ${
+                  notif.severity === 'critical' ? 'border-l-error' : 'border-l-tertiary'
+                } ${notif.acknowledged ? 'opacity-60' : ''}`}
+              >
+                <div className="flex items-start gap-md w-full">
+                  <div className="flex-shrink-0 pt-xs">
+                    <span className={`material-symbols-outlined ${
+                      notif.severity === 'critical' ? 'text-error pulse-danger' : 'text-tertiary pulse-warning'
+                    }`} style={{ fontVariationSettings: "'FILL' 1" }}>
+                      {notif.severity === 'critical' ? 'error' : 'warning'}
                     </span>
                   </div>
-                  <p className="font-body-sm text-body-sm text-on-surface leading-snug">{notif.message}</p>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-sm mb-xs flex-wrap">
+                      <span className="font-data-sm text-data-sm text-primary px-sm py-xs bg-surface-container-high rounded border border-white/10 uppercase tracking-wider">
+                        {machineName ? `${machineName} (${notif.deviceId})` : `Device: ${notif.deviceId}`}
+                      </span>
+                      <span className="font-data-sm text-data-sm text-outline-variant whitespace-nowrap">
+                        {new Date(notif.timestamp).toLocaleString()}
+                      </span>
+                    </div>
+                    <p className="font-body-sm text-body-sm text-on-surface leading-snug">{notif.message}</p>
+                  </div>
                 </div>
+                {!notif.acknowledged && (
+                  <div className="w-full sm:w-auto flex-shrink-0 sm:ml-auto pt-2 sm:pt-sm">
+                    <button 
+                      onClick={() => handleAcknowledge(notif._id)}
+                      className="w-full sm:w-auto px-md py-sm rounded-DEFAULT bg-primary text-on-primary font-label text-label uppercase tracking-widest hover:bg-primary-fixed transition-all hover:shadow-[0_0_10px_rgba(173,198,255,0.5)]"
+                    >
+                      Acknowledge
+                    </button>
+                  </div>
+                )}
               </div>
-              {!notif.acknowledged && (
-                <div className="w-full sm:w-auto flex-shrink-0 sm:ml-auto pt-2 sm:pt-sm">
-                  <button 
-                    onClick={() => handleAcknowledge(notif._id)}
-                    className="w-full sm:w-auto px-md py-sm rounded-DEFAULT bg-primary text-on-primary font-label text-label uppercase tracking-widest hover:bg-primary-fixed transition-all hover:shadow-[0_0_10px_rgba(173,198,255,0.5)]"
-                  >
-                    Acknowledge
-                  </button>
-                </div>
-              )}
-            </div>
-          ))
+            );
+          })
         ) : (
           <div className="flex flex-col items-center justify-center py-xl text-center glass-panel rounded-xl mt-lg border-dashed">
             <span className="material-symbols-outlined text-[64px] text-surface-container-highest mb-margin" style={{ fontVariationSettings: "'wght' 200" }}>done_all</span>

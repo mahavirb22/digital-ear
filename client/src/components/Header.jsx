@@ -1,8 +1,11 @@
 import React from 'react';
+import { Link } from 'react-router-dom';
 import usePushNotifications from '../hooks/usePushNotifications';
+import useNotifications from '../hooks/useNotifications';
 
 const Header = () => {
   const { subscribe, isSubscribed, loading } = usePushNotifications();
+  const { unreadCount } = useNotifications();
 
   return (
     <header className="sticky top-0 w-full z-50 flex items-center justify-between px-4 md:px-6 h-14 md:h-16 bg-slate-950/80 backdrop-blur-xl border-b border-white/10 shadow-none">
@@ -11,10 +14,15 @@ const Header = () => {
         <span className="text-lg md:text-xl font-black text-blue-500 dark:text-blue-400">Digital Ear</span>
       </div>
       <div className="flex items-center gap-2 md:gap-margin mr-10 md:mr-0">
-        <button className="relative text-slate-400 hover:bg-white/5 transition-all duration-300 p-1.5 md:p-sm rounded-full">
+        <Link 
+          to="/notifications" 
+          className="relative text-slate-400 hover:bg-white/5 transition-all duration-300 p-1.5 md:p-sm rounded-full flex items-center justify-center"
+        >
           <span className="material-symbols-outlined text-[20px] md:text-[24px]">notifications</span>
-          <span className="absolute top-0.5 right-0.5 md:top-1 md:right-1 w-2 h-2 bg-error rounded-full animate-pulse"></span>
-        </button>
+          {unreadCount > 0 && (
+            <span className="absolute top-0.5 right-0.5 md:top-1 md:right-1 w-2 h-2 bg-error rounded-full animate-pulse"></span>
+          )}
+        </Link>
         <button 
           onClick={subscribe}
           disabled={isSubscribed || loading}

@@ -5,6 +5,8 @@
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
+    "simulate": "node simulate_iot.js",
+    "test-calibration": "node verify_calibration.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],

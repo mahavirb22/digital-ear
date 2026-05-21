@@ -4,6 +4,7 @@ import { fetchNotifications } from '../api';
 const useNotifications = (deviceId = '') => {
   const [notifications, setNotifications] = useState([]);
   const [unreadCount, setUnreadCount] = useState(0);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     const loadData = async () => {
@@ -13,6 +14,8 @@ const useNotifications = (deviceId = '') => {
         setUnreadCount(data.filter(n => !n.acknowledged).length);
       } catch (error) {
         console.error('Failed to load notifications', error);
+      } finally {
+        setLoading(false);
       }
     };
 
@@ -21,7 +24,7 @@ const useNotifications = (deviceId = '') => {
     return () => clearInterval(interval);
   }, [deviceId]);
 
-  return { notifications, unreadCount };
+  return { notifications, unreadCount, loading };
 };
 
 export default useNotifications;

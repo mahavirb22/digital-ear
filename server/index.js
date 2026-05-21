@@ -10,6 +10,7 @@ const notificationRoutes = require('./routes/notifications');
 const authRoutes = require('./routes/auth');
 const deviceRoutes = require('./routes/devices');
 const mlRoutes = require('./routes/ml');
+const machineRoutes = require('./routes/machineRoutes');
 
 // Initialize app
 const app = express();
@@ -28,6 +29,7 @@ app.use('/api', dataRoutes);
 app.use('/api', notificationRoutes);
 app.use('/api/auth', authRoutes);
 app.use('/api/devices', deviceRoutes);
+app.use('/api/machines', machineRoutes);
 app.use('/api/ml', mlRoutes);
 
 // Start server

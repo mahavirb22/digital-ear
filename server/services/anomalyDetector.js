@@ -34,7 +34,7 @@ setInterval(checkMLService, 30000);
 // In-memory rolling window per device
 const deviceWindows = {}; // { deviceId: { readings: [], lastSeen: Date } }
 const WINDOW_SIZE = 50;
-const STOPPAGE_TIMEOUT_MS = 10000; // 10 seconds without data = machine stopped
+const STOPPAGE_TIMEOUT_MS = 30000; // 30 seconds without data = machine stopped
 
 // Hard threshold safety nets (always apply)
 const HARD_THRESHOLDS = {
@@ -113,7 +113,7 @@ function statisticalAnalysis(reading, window) {
  * Analyze a single reading — ML first, statistical fallback.
  * Returns { isAnomaly: boolean, reasons: string[], severity: 'warning'|'critical', mlUsed: boolean }
  */
-async function analyzeReading(reading) {
+async function analyzeReading(reading, machineBaseline = null) {
   const { deviceId, soundEnergy, frequency, current, vibration } = reading;
 
   // Initialize device window if needed
@@ -128,55 +128,96 @@ async function analyzeReading(reading) {
   let severity = 'warning';
   let mlUsed = false;
 
-  // --- Layer 1: Hard Threshold Checks (always active) ---
-  if (soundEnergy > HARD_THRESHOLDS.soundEnergy.max) {
-    reasons.push(`High sound energy (${soundEnergy.toFixed(0)} units)`);
+  // --- Layer 0: Vibration (Machine Stoppage) Check ---
+  if (vibration === 'NORMAL') {
+    // If no vibration, the machine is not running -> Anomaly Detected
+    reasons.push("Machine is not running (No vibration detected)");
     severity = 'critical';
-  }
-  if (frequency < HARD_THRESHOLDS.frequency.min || frequency > HARD_THRESHOLDS.frequency.max) {
-    reasons.push(`Abnormal frequency (${frequency.toFixed(0)} Hz)`);
-    severity = 'critical';
-  }
-  if (current > HARD_THRESHOLDS.current.max) {
-    reasons.push(`Overcurrent (${current.toFixed(2)} A)`);
-    severity = 'critical';
-  }
-  if (vibration === 'DETECTED') {
-    reasons.push('Vibration detected');
-  }
-
-  // --- Layer 2: ML Model (primary) or Statistical (fallback) ---
-  if (mlServiceAvailable) {
-    const mlResult = await getMLPrediction(reading);
-    if (mlResult && mlResult.isAnomaly) {
-      mlUsed = true;
-      // Add ML-specific reasons (avoid duplicates)
-      for (const reason of mlResult.reasons) {
-        if (!reasons.some(r => r.toLowerCase().includes(reason.substring(0, 15).toLowerCase()))) {
-          reasons.push(reason);
-        }
-      }
-      if (mlResult.severity === 'critical') severity = 'critical';
-    } else if (mlResult) {
-      mlUsed = true; // ML ran but said it's normal — still counts
-    }
   } else {
-    // Fallback to statistical analysis
-    const statReasons = statisticalAnalysis(reading, window);
-    reasons.push(...statReasons);
+    // Vibration is DETECTED -> Machine is running normally -> Check other parameters for anomalies
+    
+    // --- Layer 1: Hard Threshold Checks (always active) ---
+    if (soundEnergy > HARD_THRESHOLDS.soundEnergy.max) {
+      reasons.push(`High sound energy (${soundEnergy.toFixed(0)} units)`);
+      severity = 'critical';
+    }
+    // Only check min frequency if no baseline exists OR if baseline frequency is expected to be normal (>= min threshold)
+    const minFreqLimit = (machineBaseline && machineBaseline.frequency < HARD_THRESHOLDS.frequency.min) ? 0 : HARD_THRESHOLDS.frequency.min;
+    if (frequency < minFreqLimit || frequency > HARD_THRESHOLDS.frequency.max) {
+      reasons.push(`Abnormal frequency (${frequency.toFixed(0)} Hz)`);
+      severity = 'critical';
+    }
+    if (current > HARD_THRESHOLDS.current.max) {
+      reasons.push(`Overcurrent (${current.toFixed(2)} A)`);
+      severity = 'critical';
+    }
+
+    // --- Layer 1.5: Machine Baseline Checks (if calibrated) ---
+    if (machineBaseline) {
+      const TOLERANCE = 0.3; // 30% deviation
+      
+      const checkBaseline = (val, base, name, unit = '') => {
+        // Only apply % check if base is large enough to avoid noise triggering it
+        if (base > 0.05) {
+          if (val > base * (1 + TOLERANCE)) {
+            reasons.push(`${name} surge (30%+ above baseline: ${val.toFixed(2)}${unit} vs ${base.toFixed(2)}${unit})`);
+            severity = 'critical';
+          } else if (val < base * (1 - TOLERANCE)) {
+            reasons.push(`${name} drop (30%+ below baseline: ${val.toFixed(2)}${unit} vs ${base.toFixed(2)}${unit})`);
+            severity = 'warning';
+          }
+        }
+      };
+
+      checkBaseline(soundEnergy, machineBaseline.soundEnergy, 'Sound energy');
+      checkBaseline(frequency, machineBaseline.frequency, 'Frequency', 'Hz');
+      checkBaseline(current, machineBaseline.current, 'Current', 'A');
+    }
+
+    // --- Layer 2: ML Model (primary) or Statistical (fallback) ---
+    if (mlServiceAvailable) {
+      const mlResult = await getMLPrediction(reading);
+      if (mlResult && mlResult.isAnomaly) {
+        mlUsed = true;
+        // Add ML-specific reasons (avoid duplicates)
+        for (const reason of mlResult.reasons) {
+          if (!reasons.some(r => r.toLowerCase().includes(reason.substring(0, 15).toLowerCase()))) {
+            reasons.push(reason);
+          }
+        }
+        if (mlResult.severity === 'critical') severity = 'critical';
+      } else if (mlResult) {
+        mlUsed = true; // ML ran but said it's normal
+      }
+    } else {
+      // Fallback to statistical analysis
+      const statReasons = statisticalAnalysis(reading, window);
+      reasons.push(...statReasons);
+    }
   }
 
   // Add reading to the rolling window
-  window.readings.push({ soundEnergy, frequency, current, vibration, timestamp: new Date() });
+  const isAnomaly = reasons.length > 0;
+  window.readings.push({ soundEnergy, frequency, current, vibration, isAnomaly, timestamp: new Date() });
   if (window.readings.length > WINDOW_SIZE) {
     window.readings.shift();
   }
 
+  // Calculate frequent deviations (> 30% anomalous in the window)
+  let frequentDeviations = false;
+  if (window.readings.length >= 20) { // Require at least 20 readings to make a judgement
+    const anomalyCount = window.readings.filter(r => r.isAnomaly).length;
+    if (anomalyCount / window.readings.length > 0.3) {
+      frequentDeviations = true;
+    }
+  }
+
   return {
-    isAnomaly: reasons.length > 0,
+    isAnomaly,
     reasons,
-    severity: reasons.length > 0 ? severity : 'warning',
+    severity: isAnomaly ? severity : 'warning',
     mlUsed,
+    frequentDeviations
   };
 }
 

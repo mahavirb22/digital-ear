@@ -10,13 +10,55 @@ exports.saveReading = async (req, res) => {
     const { deviceId, soundEnergy, frequency, vibration, current } = req.body;
 
     // Check if device is registered
-    const device = await Device.findOne({ deviceId });
+    const device = await Device.findOne({ deviceId }).populate('attachedMachine');
     if (!device) {
       return res.status(404).json({ error: `Device ${deviceId} is not registered. Please register it first.` });
     }
 
-    // Run anomaly detection model (ML + statistical hybrid)
-    const analysis = await analyzeReading({ deviceId, soundEnergy, frequency, vibration, current });
+    // 1. Check if device is currently calibrating
+    const now = new Date();
+    if (device.calibrationEndTime && device.calibrationEndTime > now) {
+      // Update device last seen & status to prevent offline flag during calibration
+      device.lastSeen = new Date();
+      device.status = 'online';
+      await device.save();
+
+      const calibrationService = require('../services/calibrationService');
+      // Add reading to memory buffer
+      calibrationService.addReadingIfCalibrating(deviceId, req.body);
+      
+      // Store raw reading but skip anomaly detection
+      const newReading = new SensorReading({
+        deviceId, soundEnergy, frequency, vibration, current, isAnomaly: false
+      });
+      await newReading.save();
+
+      return res.status(200).json({ 
+        message: 'Reading saved for calibration',
+        isAnomaly: false,
+        reasons: [] 
+      });
+    }
+
+    // 2. Normal mode — Run anomaly detection if machine is calibrated
+    const isCalibrated = device.attachedMachine && device.attachedMachine.isCalibrated;
+    if (!isCalibrated) {
+      // State A: Device registered/added, but calibration not started/completed yet
+      // Update device last seen & status to prevent offline/never-connected flag
+      device.lastSeen = new Date();
+      device.status = 'online';
+      await device.save();
+
+      return res.status(200).json({
+        message: 'Device connected. Waiting for calibration to start.',
+        isAnomaly: false,
+        reasons: []
+      });
+    }
+
+    const machineBaseline = device.attachedMachine.baseline;
+
+    const analysis = await analyzeReading({ deviceId, soundEnergy, frequency, vibration, current }, machineBaseline);
 
     const newReading = new SensorReading({
       deviceId,
@@ -46,19 +88,62 @@ exports.saveReading = async (req, res) => {
       await notification.save();
 
       // Send push notifications
+      const subscriptions = await Subscription.find({});
       try {
         const payload = JSON.stringify({ title: 'System Alert', body: message });
-        const subscriptions = await Subscription.find({});
-        
-        const pushPromises = subscriptions.map(sub => {
-          return webpush.sendNotification(sub, payload).catch(err => {
-            console.error('Push notification failed for a sub:', err.statusCode || err.message);
-          });
-        });
-        
+        const pushPromises = subscriptions.map(sub => webpush.sendNotification(sub, payload).catch(() => {}));
         await Promise.all(pushPromises);
       } catch (pushError) {
         console.error('Push notification error:', pushError.message);
+      }
+    }
+
+    // 3. Update machine maintenance status based on baseline comparison
+    if (device.attachedMachine && device.attachedMachine.isCalibrated) {
+      const Machine = require('../models/Machine');
+      const currentNeedsMaintenance = analysis.isAnomaly; // True if it differs (anomalous), False if it matches (normal)
+
+      if (device.attachedMachine.needsMaintenance !== currentNeedsMaintenance) {
+        await Machine.findByIdAndUpdate(device.attachedMachine._id, { needsMaintenance: currentNeedsMaintenance });
+        
+        // Save to local object so the UI/rest of backend uses the updated value
+        device.attachedMachine.needsMaintenance = currentNeedsMaintenance;
+
+        if (currentNeedsMaintenance) {
+          const maintenanceMsg = `MAINTENANCE REQUIRED: Machine '${device.attachedMachine.name}' is deviating from its calibrated baseline! Reasons: ${analysis.reasons.join(', ')}`;
+          await new Notification({
+            deviceId,
+            message: maintenanceMsg,
+            severity: 'critical'
+          }).save();
+
+          // Send push notifications
+          const subscriptions = await Subscription.find({});
+          try {
+            const payload = JSON.stringify({ title: 'Maintenance Required', body: maintenanceMsg });
+            const pushPromises = subscriptions.map(sub => webpush.sendNotification(sub, payload).catch(() => {}));
+            await Promise.all(pushPromises);
+          } catch (pushError) {
+            console.error('Push notification error:', pushError.message);
+          }
+        } else {
+          const normalMsg = `SYSTEM NORMAL: Machine '${device.attachedMachine.name}' is back within its baseline range.`;
+          await new Notification({
+            deviceId,
+            message: normalMsg,
+            severity: 'warning'
+          }).save();
+
+          // Send push notifications
+          const subscriptions = await Subscription.find({});
+          try {
+            const payload = JSON.stringify({ title: 'System Normal', body: normalMsg });
+            const pushPromises = subscriptions.map(sub => webpush.sendNotification(sub, payload).catch(() => {}));
+            await Promise.all(pushPromises);
+          } catch (pushError) {
+            console.error('Push notification error:', pushError.message);
+          }
+        }
       }
     }
 
@@ -89,7 +174,13 @@ exports.getDeviceReadings = async (req, res) => {
 
 exports.getDevices = async (req, res) => {
   try {
-    const devices = await SensorReading.distinct('deviceId');
+    // Only return device IDs that actually exist in the Device collection
+    const registeredDevices = await Device.find({}, 'deviceId');
+    const registeredIds = registeredDevices.map(d => d.deviceId);
+    
+    // Find which of those have sent readings
+    const devices = await SensorReading.distinct('deviceId', { deviceId: { $in: registeredIds } });
+    
     res.status(200).json(devices);
   } catch (error) {
     console.error('Error fetching devices:', error);

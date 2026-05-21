@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { fetchRegisteredDevices, registerDevice, removeDevice } from '../api';
 import toast from 'react-hot-toast';
+import CalibrationModal from '../components/CalibrationModal';
 
 const ConnectDevice = () => {
   const [devices, setDevices] = useState([]);
@@ -8,6 +9,7 @@ const ConnectDevice = () => {
   const [deviceId, setDeviceId] = useState('');
   const [deviceName, setDeviceName] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [showCalibrationModal, setShowCalibrationModal] = useState(false);
 
   const loadDevices = async () => {
     try {
@@ -82,10 +84,23 @@ const ConnectDevice = () => {
 
   return (
     <div className="max-w-[900px] mx-auto w-full">
-      <div className="mb-margin">
-        <h1 className="font-h1 text-h1 text-on-surface mb-xs">Device Management</h1>
-        <p className="font-body text-body text-on-surface-variant">Register and monitor your ESP32 sensor nodes.</p>
+      <div className="mb-margin flex flex-col sm:flex-row sm:items-center justify-between gap-md">
+        <div>
+          <h1 className="font-h1 text-h1 text-on-surface mb-xs">Device Management</h1>
+          <p className="font-body text-body text-on-surface-variant">Register and monitor your ESP32 sensor nodes.</p>
+        </div>
+        <button
+          onClick={() => setShowCalibrationModal(true)}
+          className="flex items-center gap-2 bg-surface-container border border-primary/30 text-primary px-lg py-sm rounded-lg hover:bg-primary/10 transition-colors font-label text-label uppercase tracking-widest whitespace-nowrap"
+        >
+          <span className="material-symbols-outlined text-[20px]">precision_manufacturing</span>
+          Calibrate Machine
+        </button>
       </div>
+
+      {showCalibrationModal && (
+        <CalibrationModal onClose={() => setShowCalibrationModal(false)} />
+      )}
 
       {/* Register Form */}
       <div className="glass-panel rounded-xl p-lg mb-lg">

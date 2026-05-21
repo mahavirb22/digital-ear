@@ -1,13 +1,14 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Link } from 'react-router-dom';
-import { fetchDevices, fetchRegisteredDevices } from '../api';
+import { fetchDevices, fetchRegisteredDevices, fetchMachines } from '../api';
 import useNotifications from '../hooks/useNotifications';
-import DeviceCard from '../components/DeviceCard';
+import MachineCard from '../components/MachineCard';
 import toast from 'react-hot-toast';
 
 const Dashboard = () => {
   const [devices, setDevices] = useState([]);
   const [registeredDevices, setRegisteredDevices] = useState([]);
+  const [machines, setMachines] = useState([]);
   const { notifications } = useNotifications();
   const [loading, setLoading] = useState(true);
   const prevNotifCount = useRef(0);
@@ -15,14 +16,16 @@ const Dashboard = () => {
   useEffect(() => {
     const loadDevices = async () => {
       try {
-        const [active, registered] = await Promise.all([
+        const [active, registered, machinesData] = await Promise.all([
           fetchDevices(),
-          fetchRegisteredDevices()
+          fetchRegisteredDevices(),
+          fetchMachines()
         ]);
         setDevices(active);
         setRegisteredDevices(registered);
+        setMachines(machinesData);
       } catch (error) {
-        console.error('Failed to fetch devices', error);
+        console.error('Failed to fetch dashboard data', error);
       } finally {
         setLoading(false);
       }
@@ -112,30 +115,6 @@ const Dashboard = () => {
     );
   }
 
-  // If no registered devices, show empty state
-  if (registeredDevices.length === 0) {
-    return (
-      <div className="flex flex-col items-center justify-center py-xl text-center min-h-[60vh]">
-        <div className="glass-panel rounded-xl p-xl max-w-[500px] w-full flex flex-col items-center gap-lg">
-          <span className="material-symbols-outlined text-[80px] text-surface-container-highest" style={{ fontVariationSettings: "'wght' 200" }}>sensors_off</span>
-          <div>
-            <h2 className="font-h1 text-h1 text-on-surface mb-xs">No Devices Connected</h2>
-            <p className="font-body text-body text-on-surface-variant max-w-[400px] mx-auto mb-lg">
-              The Digital Ear system requires at least one ESP32 sensor node to be registered before you can begin monitoring.
-            </p>
-          </div>
-          <Link
-            to="/connect-device"
-            className="bg-primary text-on-primary font-label text-label uppercase tracking-widest px-lg py-md rounded-lg hover:bg-primary-fixed transition-all hover:shadow-[0_0_10px_rgba(173,198,255,0.5)] flex items-center justify-center gap-sm w-full sm:w-auto"
-          >
-            <span className="material-symbols-outlined text-[18px]">add_circle</span>
-            Connect a Device
-          </Link>
-        </div>
-      </div>
-    );
-  }
-
   return (
     <>
       {/* Hero Stats */}
@@ -173,25 +152,79 @@ const Dashboard = () => {
         </div>
       </div>
 
-      {/* Device Grid Header */}
-      <div className="flex justify-between items-end border-b border-white/5 pb-sm mt-margin">
-        <h2 className="font-h2 text-on-surface">Device Telemetry Array</h2>
-        <span className="font-data-sm text-outline">Showing {devices.length} active nodes</span>
+      {/* Machines Section */}
+      <div className="flex justify-between items-end border-b border-white/5 pb-sm mt-margin mb-md">
+        <h2 className="font-h2 text-on-surface flex items-center gap-2">
+          <span className="material-symbols-outlined text-primary">precision_manufacturing</span>
+          Machine Profiles
+        </h2>
+        <span className="font-data-sm text-outline">Showing {machines.length} configured machines</span>
       </div>
-
-      {/* Device Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-gutter">
-        {devices.length > 0 ? (
-          devices.map(deviceId => (
-            <DeviceCard key={deviceId} deviceId={deviceId} />
+      
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-gutter mb-xl">
+        {machines.length > 0 ? (
+          machines.map(machine => (
+            <MachineCard 
+              key={machine._id} 
+              machine={machine} 
+              onRefresh={async () => {
+                const machinesData = await fetchMachines();
+                setMachines(machinesData);
+              }} 
+            />
           ))
         ) : (
-          <div className="col-span-full py-xl text-center text-outline">No active telemetry streams. Waiting for device data...</div>
+          <div className="col-span-full py-xl px-md text-center text-outline-variant bg-surface-container-low rounded-lg border border-dashed border-white/10 flex flex-col items-center justify-center gap-sm">
+            <span className="material-symbols-outlined text-[48px] text-outline-variant">precision_manufacturing</span>
+            <div className="font-h2 text-on-surface text-base">No Machine Profiles Registered</div>
+            <p className="max-w-[400px] text-body-sm text-outline mx-auto">
+              Please register a device first, then complete the 2-minute calibration sequence to establish baseline normal readings.
+            </p>
+            <Link 
+              to="/connect-device"
+              className="mt-sm bg-primary/10 border border-primary/20 text-primary font-label text-label uppercase tracking-widest px-md py-sm rounded-lg hover:bg-primary/20 transition-all flex items-center gap-xs"
+            >
+              <span className="material-symbols-outlined text-[16px]">add_circle</span>
+              Go to Device Management
+            </Link>
+          </div>
         )}
+      </div>
+
+      {/* How it Works / System Overview Section */}
+      <div className="glass-panel p-lg rounded-xl mt-margin flex flex-col gap-md border-primary/10">
+        <h3 className="font-h2 text-on-surface flex items-center gap-sm">
+          <span className="material-symbols-outlined text-primary">info</span>
+          Acoustic Anomaly Detection System — How it Works
+        </h3>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-md text-body-sm text-outline">
+          <div className="flex flex-col gap-xs p-sm bg-surface-container-low rounded-lg border border-white/5">
+            <div className="flex items-center gap-xs font-bold text-on-surface mb-xs">
+              <span className="material-symbols-outlined text-primary text-[18px]">precision_manufacturing</span>
+              1. Calibration Baseline
+            </div>
+            During a 2-minute calibration sequence, the system captures normal operating sounds, frequencies, current, and vibrations to build a reference profile of a healthy machine.
+          </div>
+          <div className="flex flex-col gap-xs p-sm bg-surface-container-low rounded-lg border border-white/5">
+            <div className="flex items-center gap-xs font-bold text-on-surface mb-xs">
+              <span className="material-symbols-outlined text-primary text-[18px]">graphic_eq</span>
+              2. Acoustic Monitoring
+            </div>
+            Microphones capture real-time acoustic signatures. The server processes signals with FFT spectral analysis and compares them continuously against the machine's baseline.
+          </div>
+          <div className="flex flex-col gap-xs p-sm bg-surface-container-low rounded-lg border border-white/5">
+            <div className="flex items-center gap-xs font-bold text-on-surface mb-xs">
+              <span className="material-symbols-outlined text-primary text-[18px]">notifications_active</span>
+              3. Anomaly & Maintenance
+            </div>
+            Deviations exceeding 30% or flagged by ML trigger immediate alerts. Persistent deviations flag the machine as "Maintenance Required" to prevent failure.
+          </div>
+        </div>
       </div>
     </>
   );
 };
 
 export default Dashboard;
+
 

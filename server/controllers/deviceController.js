@@ -2,7 +2,7 @@ const Device = require('../models/Device');
 const { checkForStoppages } = require('../services/anomalyDetector');
 const Notification = require('../models/Notification');
 
-const OFFLINE_THRESHOLD_MS = 10000; // 10 seconds
+const OFFLINE_THRESHOLD_MS = 30000; // 30 seconds
 
 exports.registerDevice = async (req, res) => {
   try {
@@ -38,7 +38,22 @@ exports.removeDevice = async (req, res) => {
     if (!device) {
       return res.status(404).json({ error: 'Device not found' });
     }
-    res.json({ message: 'Device removed successfully' });
+
+    // Cascade delete associated readings and notifications
+    const SensorReading = require('../models/SensorReading');
+    const Notification = require('../models/Notification');
+    const Machine = require('../models/Machine');
+
+    await SensorReading.deleteMany({ deviceId });
+    await Notification.deleteMany({ deviceId });
+
+    // Detach from any machine
+    await Machine.updateMany(
+      { deviceAttached: device._id },
+      { $set: { deviceAttached: null } }
+    );
+
+    res.json({ message: 'Device and its data removed successfully' });
   } catch (error) {
     console.error('Error removing device:', error);
     res.status(500).json({ error: 'Failed to remove device' });
