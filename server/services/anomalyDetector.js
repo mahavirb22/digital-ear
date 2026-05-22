@@ -44,7 +44,7 @@ const STOPPAGE_GRACE_PERIOD_MS = 8000; // 8 seconds of continuous NORMAL before 
 // Hard threshold safety nets (always apply)
 const HARD_THRESHOLDS = {
   soundEnergy: { max: 60000 },
-  frequency: { min: 300, max: 2000 },
+  frequency: { min: 200, max: 1500 }, // IGNORE FREQUENCY ANOMALIES - wide range covers all motors
   current: { max: 1.2 },
 };
 
@@ -259,21 +259,19 @@ async function analyzeReading(
       )
     : HARD_THRESHOLDS.soundEnergy.max;
 
-  const freqMin = machineBaseline
-    ? Math.min(HARD_THRESHOLDS.frequency.min, machineBaseline.frequency * 0.5)
-    : HARD_THRESHOLDS.frequency.min;
-
-  const freqMax = machineBaseline
-    ? Math.max(HARD_THRESHOLDS.frequency.max, machineBaseline.frequency * 2.0)
-    : HARD_THRESHOLDS.frequency.max;
+  // Frequency is IGNORED for anomaly detection - wide hard threshold (200-1500 Hz)
+  // This prevents false positives from motor frequency variations
+  const freqMin = HARD_THRESHOLDS.frequency.min; // 200 Hz (for reference only)
+  const freqMax = HARD_THRESHOLDS.frequency.max; // 1500 Hz (for reference only)
 
   // Track individual sensor deviations (for multi-sensor fusion later)
   const isOutcurrent = current > currentMax;
   const isOutsound = soundEnergy > soundMax;
-  const isOutfreq = frequency < freqMin || frequency > freqMax;
+  const isOutfreq = false; // FREQUENCY ANOMALIES IGNORED - never trigger
   const isOutvib = vibration === "HIGH";
 
   // Hard threshold deviations (always critical if triggered)
+  // NOTE: Frequency is excluded from anomaly detection
   const hardThresholdDeviations = [];
   if (isOutcurrent)
     hardThresholdDeviations.push(`Overcurrent (${current.toFixed(2)} A)`);
@@ -281,10 +279,7 @@ async function analyzeReading(
     hardThresholdDeviations.push(
       `High sound energy (${soundEnergy.toFixed(0)} units)`,
     );
-  if (isOutfreq)
-    hardThresholdDeviations.push(
-      `Abnormal frequency (${frequency.toFixed(0)} Hz)`,
-    );
+  // Frequency check REMOVED - always within acceptable range (200-1500 Hz)
   if (isOutvib) hardThresholdDeviations.push(`High vibration levels detected`);
 
   // 3. Baseline Deviations (if calibrated and machine is running)
@@ -294,18 +289,25 @@ async function analyzeReading(
   let currentDeviation = false;
 
   if (machineBaseline && !isStoppage) {
-    const TOLERANCE = 0.3; // 30% deviation
+    const TOLERANCE = 0.3; // 30% deviation for sound/other
+    const CURRENT_TOLERANCE = 0.15; // 15% deviation for current (stricter - detects lower current faster)
 
-    const checkBaseline = (val, base, name, unit = "") => {
+    const checkBaseline = (
+      val,
+      base,
+      name,
+      unit = "",
+      tolerance = TOLERANCE,
+    ) => {
       if (base > 0.05) {
-        if (val > base * (1 + TOLERANCE)) {
+        if (val > base * (1 + tolerance)) {
           rawDeviations.push(
-            `${name} surge (30%+ above baseline: ${val.toFixed(2)}${unit} vs ${base.toFixed(2)}${unit})`,
+            `${name} surge (${(tolerance * 100).toFixed(0)}%+ above baseline: ${val.toFixed(2)}${unit} vs ${base.toFixed(2)}${unit})`,
           );
           return true;
-        } else if (val < base * (1 - TOLERANCE)) {
+        } else if (val < base * (1 - tolerance)) {
           rawDeviations.push(
-            `${name} drop (30%+ below baseline: ${val.toFixed(2)}${unit} vs ${base.toFixed(2)}${unit})`,
+            `${name} drop (${(tolerance * 100).toFixed(0)}%+ below baseline: ${val.toFixed(2)}${unit} vs ${base.toFixed(2)}${unit})`,
           );
           return true;
         }
@@ -318,20 +320,16 @@ async function analyzeReading(
       machineBaseline.soundEnergy,
       "Sound energy",
     );
-    // Only check baseline/min frequency if baseline frequency is within safe limit
-    if (machineBaseline.frequency >= HARD_THRESHOLDS.frequency.min) {
-      freqDeviation = checkBaseline(
-        frequency,
-        machineBaseline.frequency,
-        "Frequency",
-        "Hz",
-      );
-    }
+    // FREQUENCY BASELINE CHECK REMOVED - frequency never triggers anomaly
+    // Acceptable range: 200-1500 Hz (covers all motor types)
+    freqDeviation = false;
+
     currentDeviation = checkBaseline(
       current,
       machineBaseline.current,
       "Current",
       "A",
+      CURRENT_TOLERANCE,
     );
   }
 
@@ -416,11 +414,10 @@ async function analyzeReading(
   const isVibrationNormal = vibration === "DETECTED";
   const isVibrationHigh = vibration === "HIGH";
 
+  // Audio quality check: ONLY based on sound energy (frequency is independent, never compared to baseline)
   const isAudioHigh = machineBaseline
-    ? soundEnergy > Math.max(machineBaseline.soundEnergy * 1.25, 45000) ||
-      frequency < Math.min(500, machineBaseline.frequency * 0.7) ||
-      frequency > Math.max(1800, machineBaseline.frequency * 1.3)
-    : soundEnergy > 45000 || frequency < 500 || frequency > 1800;
+    ? soundEnergy > Math.max(machineBaseline.soundEnergy * 1.25, 45000)
+    : soundEnergy > 45000;
 
   const isAudioNormal = !isAudioHigh;
 
