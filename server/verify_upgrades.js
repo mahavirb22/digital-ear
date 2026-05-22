@@ -456,6 +456,7 @@ async function runVerification() {
   } finally {
     await mongoose.disconnect();
     console.log('🔌 Disconnected from MongoDB.');
+    process.exit(0);
   }
 }
 

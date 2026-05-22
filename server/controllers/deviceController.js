@@ -66,6 +66,9 @@ exports.removeDevice = async (req, res) => {
       }
     );
 
+    const { resetDeviceWindow } = require('../services/anomalyDetector');
+    resetDeviceWindow(deviceId);
+
     res.json({ message: 'Device and its data removed successfully' });
   } catch (error) {
     console.error('Error removing device:', error);

@@ -8,12 +8,18 @@ const { analyzeReading } = require('../services/anomalyDetector');
 const lastNotificationTimes = {};
 
 const normalizeVibration = (vibration) => {
-  if (vibration === 'DETECTED' || vibration === 'NORMAL') {
+  if (vibration === 'DETECTED' || vibration === 'NORMAL' || vibration === 'HIGH') {
     return vibration;
   }
   const val = Number(vibration);
   if (!isNaN(val)) {
-    return val > 0 ? 'DETECTED' : 'NORMAL';
+    if (val > 120) {
+      return 'HIGH';
+    } else if (val > 0) {
+      return 'DETECTED';
+    } else {
+      return 'NORMAL';
+    }
   }
   return vibration;
 };
@@ -72,8 +78,9 @@ exports.saveReading = async (req, res) => {
     }
 
     const machineBaseline = device.attachedMachine.baseline;
+    const machineStatus = device.attachedMachine.status || 'running';
 
-    const analysis = await analyzeReading({ deviceId, soundEnergy, frequency, vibration, current }, machineBaseline);
+    const analysis = await analyzeReading({ deviceId, soundEnergy, frequency, vibration, current }, machineBaseline, machineStatus);
 
     const newReading = new SensorReading({
       deviceId,
@@ -101,6 +108,7 @@ exports.saveReading = async (req, res) => {
 
     // Create notification if anomaly detected
     const isCalibratedMachine = device.attachedMachine && device.attachedMachine.isCalibrated;
+    // Send raw anomaly push notifications for uncalibrated machines only (calibrated machines use maintenance notifications below)
     if (analysis.isAnomaly && analysis.reasons.length > 0 && !isCalibratedMachine) {
       const nowMs = Date.now();
       const lastTime = lastNotificationTimes[deviceId] || 0;
@@ -247,7 +255,8 @@ exports.saveBatchReadings = async (req, res) => {
       
       let isAnomaly = false;
       if (isCalibrated) {
-        const analysis = await analyzeReading({ deviceId, ...reading }, machineBaseline);
+        const batchMachineStatus = device.attachedMachine.status || 'running';
+        const analysis = await analyzeReading({ deviceId, ...reading }, machineBaseline, batchMachineStatus);
         isAnomaly = analysis.isAnomaly;
         if (isAnomaly) anyAnomaly = true;
       }

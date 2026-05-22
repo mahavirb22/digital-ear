@@ -139,18 +139,18 @@ const DeviceDetail = () => {
           </div>
         </div>
         {/* Vibration */}
-        <div className={`glass-card p-md rounded-lg flex flex-col justify-between h-32 relative overflow-hidden group transition-all duration-300 ${latestReading.vibration === 'DETECTED' ? 'border-error/50 shadow-[inset_0_0_20px_rgba(255,180,171,0.05)]' : 'hover:border-white/30'}`}>
+        <div className={`glass-card p-md rounded-lg flex flex-col justify-between h-32 relative overflow-hidden group transition-all duration-300 ${latestReading.vibration === 'HIGH' ? 'border-error/50 shadow-[inset_0_0_20px_rgba(255,180,171,0.05)]' : 'hover:border-white/30'}`}>
           <div className="flex justify-between items-start">
             <span className="font-label text-label text-outline uppercase">Vibration</span>
-            <span className={`material-symbols-outlined text-[20px] ${latestReading.vibration === 'DETECTED' ? 'text-error/70' : 'text-outline-variant'}`}>vibration</span>
+            <span className={`material-symbols-outlined text-[20px] ${latestReading.vibration === 'HIGH' ? 'text-error/70' : 'text-outline-variant'}`}>vibration</span>
           </div>
           <div className="flex items-end justify-between">
             <div className="flex items-baseline gap-1">
-              <span className={`font-data-lg text-data-lg ${latestReading.vibration === 'DETECTED' ? 'text-error' : 'text-on-surface'}`}>
+              <span className={`font-data-lg text-data-lg ${latestReading.vibration === 'HIGH' ? 'text-error' : 'text-on-surface'}`}>
                 {latestReading.vibration}
               </span>
             </div>
-            {latestReading.vibration === 'DETECTED' && (
+            {latestReading.vibration === 'HIGH' && (
               <div className="flex items-center text-error font-data-sm text-data-sm glow-warning">
                 <span className="material-symbols-outlined text-[16px]">warning</span>
               </div>

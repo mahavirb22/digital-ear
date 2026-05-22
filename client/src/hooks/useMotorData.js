@@ -20,13 +20,13 @@ const deriveMotorData = (latestReading) => {
 
   const rpm = latestReading.frequency;
   const temperature = clamp(25 + latestReading.current * 20, 25, 120);
-  const vibration = latestReading.vibration === 'DETECTED' ? 0.85 : 0.0;
+  const vibration = latestReading.vibration === 'HIGH' ? 0.85 : (latestReading.vibration === 'DETECTED' ? 0.2 : 0.0);
 
   const isAnomaly = latestReading.isAnomaly;
-  const vibDetected = latestReading.vibration === 'DETECTED';
+  const vibDetected = latestReading.vibration === 'DETECTED' || latestReading.vibration === 'HIGH';
 
   let status = 'normal';
-  if (isAnomaly && vibDetected) {
+  if (isAnomaly && latestReading.vibration === 'HIGH') {
     status = 'critical';
   } else if (isAnomaly) {
     status = 'warning';
@@ -34,7 +34,7 @@ const deriveMotorData = (latestReading) => {
 
   const isOverheating = temperature > 85;
   const isHighVibration = vibration > 0.5;
-  const isFailurePredicted = isAnomaly && vibDetected && latestReading.current > 2.0;
+  const isFailurePredicted = isAnomaly && (latestReading.vibration === 'HIGH') && latestReading.current > 2.0;
 
   // Health score calculation (100 = perfect, lower = worse)
   // RPM penalty: ideal range 800-1800, outside penalizes

@@ -81,6 +81,14 @@ exports.markMaintenanceComplete = async (req, res) => {
     machine.needsMaintenance = false;
     await machine.save();
     
+    // Clear the sliding window for anomaly detection for the attached device
+    const Device = require('../models/Device');
+    const device = await Device.findOne({ attachedMachine: machineId });
+    if (device) {
+      const { resetDeviceWindow } = require('../services/anomalyDetector');
+      resetDeviceWindow(device.deviceId);
+    }
+
     res.status(200).json({ message: 'Maintenance marked as complete', machine });
   } catch (error) {
     console.error('Error marking maintenance complete:', error);

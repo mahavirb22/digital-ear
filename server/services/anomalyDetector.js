@@ -33,14 +33,15 @@ setInterval(checkMLService, 30000);
 
 // In-memory rolling window per device
 const deviceWindows = {}; // { deviceId: { readings: [], lastSeen: Date } }
-const WINDOW_SIZE = 50;
+const WINDOW_SIZE = 60;
 const STOPPAGE_TIMEOUT_MS = 30000; // 30 seconds without data = machine stopped
+const STOPPAGE_GRACE_PERIOD_MS = 8000;  // 8 seconds of continuous NORMAL before flagging stoppage
 
 // Hard threshold safety nets (always apply)
 const HARD_THRESHOLDS = {
   soundEnergy: { max: 60000 },
   frequency: { min: 300, max: 2000 },
-  current: { max: 2.0 },
+  current: { max: 1.2 },
 };
 
 /**
@@ -88,21 +89,33 @@ function statisticalAnalysis(reading, window) {
     const freqStats = computeStats(freqValues);
     const currentStats = computeStats(currentValues);
 
-    const SIGMA_THRESHOLD = 2;
+    // Use 3-sigma (standard industrial practice for Statistical Process Control)
+    // to reduce false positives from minor random noise.
+    const SIGMA_THRESHOLD = 3;
 
-    if (energyStats.std > 0 && Math.abs(soundEnergy - energyStats.mean) > SIGMA_THRESHOLD * energyStats.std) {
+    // Minimum standard deviation (noise floor) to prevent hypersensitivity
+    // on extremely stable signals.
+    const MIN_STD_ENERGY = 3000;
+    const MIN_STD_FREQ = 30;
+    const MIN_STD_CURRENT = 0.05;
+
+    const energyStd = Math.max(energyStats.std, MIN_STD_ENERGY);
+    const freqStd = Math.max(freqStats.std, MIN_STD_FREQ);
+    const currentStd = Math.max(currentStats.std, MIN_STD_CURRENT);
+
+    if (Math.abs(soundEnergy - energyStats.mean) > SIGMA_THRESHOLD * energyStd) {
       const direction = soundEnergy > energyStats.mean ? 'spike' : 'drop';
-      reasons.push(`Sound energy ${direction} (σ-deviation: ${((soundEnergy - energyStats.mean) / energyStats.std).toFixed(1)}σ)`);
+      reasons.push(`Sound energy ${direction} (σ-deviation: ${((soundEnergy - energyStats.mean) / energyStd).toFixed(1)}σ)`);
     }
 
-    if (freqStats.std > 0 && Math.abs(frequency - freqStats.mean) > SIGMA_THRESHOLD * freqStats.std) {
+    if (Math.abs(frequency - freqStats.mean) > SIGMA_THRESHOLD * freqStd) {
       const direction = frequency > freqStats.mean ? 'spike' : 'drop';
-      reasons.push(`Frequency ${direction} (σ-deviation: ${((frequency - freqStats.mean) / freqStats.std).toFixed(1)}σ)`);
+      reasons.push(`Frequency ${direction} (σ-deviation: ${((frequency - freqStats.mean) / freqStd).toFixed(1)}σ)`);
     }
 
-    if (currentStats.std > 0 && Math.abs(current - currentStats.mean) > SIGMA_THRESHOLD * currentStats.std) {
+    if (Math.abs(current - currentStats.mean) > SIGMA_THRESHOLD * currentStd) {
       const direction = current > currentStats.mean ? 'surge' : 'drop';
-      reasons.push(`Current ${direction} (σ-deviation: ${((current - currentStats.mean) / currentStats.std).toFixed(1)}σ)`);
+      reasons.push(`Current ${direction} (σ-deviation: ${((current - currentStats.mean) / currentStd).toFixed(1)}σ)`);
     }
   }
 
@@ -113,7 +126,7 @@ function statisticalAnalysis(reading, window) {
  * Analyze a single reading — ML first, statistical fallback.
  * Returns { isAnomaly: boolean, reasons: string[], severity: 'warning'|'critical', mlUsed: boolean }
  */
-async function analyzeReading(reading, machineBaseline = null) {
+async function analyzeReading(reading, machineBaseline = null, machineStatus = 'running') {
   const { deviceId, soundEnergy, frequency, current, vibration } = reading;
 
   // Initialize device window if needed
@@ -124,13 +137,25 @@ async function analyzeReading(reading, machineBaseline = null) {
   const window = deviceWindows[deviceId];
   window.lastSeen = new Date();
 
+  if (machineStatus === 'scheduled_off') {
+    window.offStartTime = null;
+    return {
+      isAnomaly: false,
+      reasons: [],
+      severity: 'warning',
+      mlUsed: false,
+      frequentDeviations: false,
+      zeroDriftAdjustment: null
+    };
+  }
+
   // Initialize offStartTime from DB if the machine is off/stopped and we don't have it in memory
   if (!window.offStartTime && vibration === 'NORMAL') {
     try {
       const SensorReading = require('../models/SensorReading');
       const lastActive = await SensorReading.findOne({
         deviceId,
-        vibration: 'DETECTED'
+        vibration: { $in: ['DETECTED', 'HIGH'] }
       }).sort({ timestamp: -1 });
 
       if (lastActive) {
@@ -152,93 +177,215 @@ async function analyzeReading(reading, machineBaseline = null) {
     }
   }
 
-  const reasons = [];
-  let severity = 'warning';
-  let mlUsed = false;
+  // Raw deviations found in the current reading
+  const rawDeviations = [];
+  let isStoppage = false;
 
-  // --- Layer 0: Vibration (Machine Stoppage) Check ---
-  let isStopped = false;
+  // 1. Vibration Stoppage Check (Layer 0)
   if (vibration === 'NORMAL') {
     if (!machineBaseline || machineBaseline.vibrationLevel > 0.1) {
-      isStopped = true;
-      reasons.push("Machine is not running (No vibration detected)");
-      severity = 'critical';
+      isStoppage = true;
+      rawDeviations.push("Machine is not running (No vibration detected)");
     } else {
       // Vibration-less machine: fallback to checking current
       if (machineBaseline.current > 0.1 && current < 0.1) {
-        isStopped = true;
-        reasons.push("Machine is not running (Zero current detected)");
-        severity = 'critical';
+        isStoppage = true;
+        rawDeviations.push("Machine is not running (Zero current detected)");
       }
     }
   }
-  
-  if (isStopped) {
+
+  if (isStoppage) {
     if (!window.offStartTime) window.offStartTime = new Date();
   } else {
+    // Motor is running (vibration DETECTED). Reset the stoppage timer and clear stale
+    // anomaly window entries so past NORMAL readings don't keep maintenance alert alive.
     window.offStartTime = null;
-    // Machine is running normally -> Check other parameters for anomalies
-    
-    // --- Layer 1: Hard Threshold Checks (always active) ---
-    if (soundEnergy > HARD_THRESHOLDS.soundEnergy.max) {
-      reasons.push(`High sound energy (${soundEnergy.toFixed(0)} units)`);
-      severity = 'critical';
-    }
-    // Only check min frequency if no baseline exists OR if baseline frequency is expected to be normal (>= min threshold)
-    const minFreqLimit = (machineBaseline && machineBaseline.frequency < HARD_THRESHOLDS.frequency.min) ? 0 : HARD_THRESHOLDS.frequency.min;
-    if (frequency < minFreqLimit || frequency > HARD_THRESHOLDS.frequency.max) {
-      reasons.push(`Abnormal frequency (${frequency.toFixed(0)} Hz)`);
-      severity = 'critical';
-    }
-    if (current > HARD_THRESHOLDS.current.max) {
-      reasons.push(`Overcurrent (${current.toFixed(2)} A)`);
-      severity = 'critical';
-    }
-
-    // --- Layer 1.5: Machine Baseline Checks (if calibrated) ---
-    if (machineBaseline) {
-      const TOLERANCE = 0.3; // 30% deviation
-      
-      const checkBaseline = (val, base, name, unit = '') => {
-        // Only apply % check if base is large enough to avoid noise triggering it
-        if (base > 0.05) {
-          if (val > base * (1 + TOLERANCE)) {
-            reasons.push(`${name} surge (30%+ above baseline: ${val.toFixed(2)}${unit} vs ${base.toFixed(2)}${unit})`);
-            severity = 'critical';
-          } else if (val < base * (1 - TOLERANCE)) {
-            reasons.push(`${name} drop (30%+ below baseline: ${val.toFixed(2)}${unit} vs ${base.toFixed(2)}${unit})`);
-            severity = 'warning';
-          }
+    if (vibration === 'DETECTED') {
+      // Mark all stale anomaly entries in the window as non-anomalous so the
+      // debounce counters (duration/frequency) reset cleanly when motor resumes.
+      for (const r of window.readings) {
+        if (r.vibration !== 'DETECTED') {
+          r.isRawAnomaly = false;
         }
-      };
-
-      checkBaseline(soundEnergy, machineBaseline.soundEnergy, 'Sound energy');
-      checkBaseline(frequency, machineBaseline.frequency, 'Frequency', 'Hz');
-      checkBaseline(current, machineBaseline.current, 'Current', 'A');
-    }
-
-    // --- Layer 2: ML Model (primary) or Statistical (fallback) ---
-    if (mlServiceAvailable) {
-      const mlResult = await getMLPrediction(reading);
-      if (mlResult && mlResult.isAnomaly) {
-        mlUsed = true;
-        // Add ML-specific reasons (avoid duplicates)
-        for (const reason of mlResult.reasons) {
-          if (!reasons.some(r => r.toLowerCase().includes(reason.substring(0, 15).toLowerCase()))) {
-            reasons.push(reason);
-          }
-        }
-        if (mlResult.severity === 'critical') severity = 'critical';
-      } else if (mlResult) {
-        mlUsed = true; // ML ran but said it's normal
       }
-    } else {
-      // Fallback to statistical analysis
-      const statReasons = statisticalAnalysis(reading, window);
-      reasons.push(...statReasons);
     }
   }
 
+  // 2. Absolute limits (Fail-Safe Outliers) - Scale based on baseline if calibrated
+  const currentMax = machineBaseline 
+    ? Math.max(HARD_THRESHOLDS.current.max, machineBaseline.current * 2)
+    : HARD_THRESHOLDS.current.max;
+
+  const soundMax = machineBaseline
+    ? Math.max(HARD_THRESHOLDS.soundEnergy.max, machineBaseline.soundEnergy * 2.5)
+    : HARD_THRESHOLDS.soundEnergy.max;
+
+  const freqMin = machineBaseline
+    ? Math.min(HARD_THRESHOLDS.frequency.min, machineBaseline.frequency * 0.5)
+    : HARD_THRESHOLDS.frequency.min;
+
+  const freqMax = machineBaseline
+    ? Math.max(HARD_THRESHOLDS.frequency.max, machineBaseline.frequency * 2.0)
+    : HARD_THRESHOLDS.frequency.max;
+
+  const isOutcurrent = current > currentMax;
+  const isOutsound = soundEnergy > soundMax;
+  const isOutfreq = frequency < freqMin || frequency > freqMax;
+  const isOutvib = vibration === 'HIGH';
+
+  if (isOutcurrent) rawDeviations.push(`Overcurrent (${current.toFixed(2)} A)`);
+  if (isOutsound) rawDeviations.push(`High sound energy (${soundEnergy.toFixed(0)} units)`);
+  if (isOutfreq) rawDeviations.push(`Abnormal frequency (${frequency.toFixed(0)} Hz)`);
+  if (isOutvib) rawDeviations.push(`High vibration levels detected`);
+
+  // 3. Baseline Deviations (if calibrated and machine is running)
+  if (machineBaseline && !isStoppage) {
+    const TOLERANCE = 0.3; // 30% deviation
+    
+    const checkBaseline = (val, base, name, unit = '') => {
+      if (base > 0.05) {
+        if (val > base * (1 + TOLERANCE)) {
+          rawDeviations.push(`${name} surge (30%+ above baseline: ${val.toFixed(2)}${unit} vs ${base.toFixed(2)}${unit})`);
+        } else if (val < base * (1 - TOLERANCE)) {
+          rawDeviations.push(`${name} drop (30%+ below baseline: ${val.toFixed(2)}${unit} vs ${base.toFixed(2)}${unit})`);
+        }
+      }
+    };
+
+    checkBaseline(soundEnergy, machineBaseline.soundEnergy, 'Sound energy');
+    // Only check baseline/min frequency if baseline frequency is within safe limit
+    if (machineBaseline.frequency >= HARD_THRESHOLDS.frequency.min) {
+      checkBaseline(frequency, machineBaseline.frequency, 'Frequency', 'Hz');
+    }
+    checkBaseline(current, machineBaseline.current, 'Current', 'A');
+  }
+
+  // 4. ML / Statistical Fallback deviations
+  let mlUsed = false;
+  let mlAnomaly = false;
+  const mlReasons = [];
+
+  if (!isStoppage) {
+    if (mlServiceAvailable) {
+      const mlResult = await getMLPrediction(reading);
+      if (mlResult) {
+        mlUsed = true;
+        if (mlResult.isAnomaly) {
+          mlAnomaly = true;
+          mlResult.reasons.forEach(r => mlReasons.push(r));
+        }
+      }
+    } else {
+      // Statistical fallback deviations
+      const statReasons = statisticalAnalysis(reading, window);
+      rawDeviations.push(...statReasons);
+    }
+  }
+
+  // Merge ML reasons if found
+  if (mlAnomaly) {
+    mlReasons.forEach(reason => {
+      if (!rawDeviations.some(r => r.toLowerCase().includes(reason.substring(0, 15).toLowerCase()))) {
+        rawDeviations.push(reason);
+      }
+    });
+  }
+
+  // 5. Multivariate Sensor Fusion (Correlation Logic)
+  const isCurrentHigh = machineBaseline 
+    ? (current > Math.max(machineBaseline.current * 1.25, 0.8))
+    : (current > 0.85);
+
+  const isVibrationNormal = vibration === 'DETECTED';
+  const isVibrationHigh = vibration === 'HIGH';
+
+  const isAudioHigh = machineBaseline
+    ? (soundEnergy > Math.max(machineBaseline.soundEnergy * 1.25, 45000) || 
+       frequency < Math.min(500, machineBaseline.frequency * 0.7) || 
+       frequency > Math.max(1800, machineBaseline.frequency * 1.3))
+    : (soundEnergy > 45000 || frequency < 500 || frequency > 1800);
+
+  const isAudioNormal = !isAudioHigh;
+
+  let fusionDiagnostic = null;
+  let fusionSeverity = null;
+
+  if (isCurrentHigh && isVibrationNormal && isAudioNormal) {
+    fusionDiagnostic = "Condition A: Motor struggling against heavy load or internal electrical fault (mechanical components intact).";
+    fusionSeverity = 'warning';
+  } else if (!isCurrentHigh && isVibrationHigh && isAudioHigh) {
+    fusionDiagnostic = "Condition B: Mechanical issue detected (loose mounting, failing bearing, or misaligned shaft).";
+    fusionSeverity = 'critical';
+  } else if (isCurrentHigh && isVibrationHigh && isAudioHigh) {
+    fusionDiagnostic = "Condition C: Compounding failure. Mechanical jam causing severe vibration/noise and forcing motor electrical overload.";
+    fusionSeverity = 'critical';
+  }
+
+  // 6. Sliding window & debouncing evaluation
+  const isRawAnomaly = rawDeviations.length > 0 || mlAnomaly || fusionDiagnostic !== null;
+  
+  // Push to rolling window
+  window.readings.push({ soundEnergy, frequency, current, vibration, isRawAnomaly, timestamp: new Date() });
+  if (window.readings.length > WINDOW_SIZE) {
+    window.readings.shift();
+  }
+
+  // Determine immediate critical breaches (Level 2)
+  // Stoppage is only critical if it has persisted beyond the grace period
+  const stoppageConfirmed = isStoppage && window.offStartTime &&
+    (new Date() - window.offStartTime) > STOPPAGE_GRACE_PERIOD_MS;
+
+  const hasImmediateCriticalBreach = 
+    stoppageConfirmed || 
+    isOutcurrent || 
+    isOutsound || 
+    isOutfreq || 
+    isOutvib || 
+    fusionSeverity === 'critical';
+
+  let isAnomaly = false;
+  let severity = 'warning';
+  const reasons = [];
+
+  if (hasImmediateCriticalBreach) {
+    isAnomaly = true;
+    severity = 'critical';
+    if (stoppageConfirmed) {
+      reasons.push(...rawDeviations);
+    } else {
+      if (fusionDiagnostic) {
+        reasons.push(fusionDiagnostic);
+      }
+      reasons.push(...rawDeviations);
+    }
+  } else if (isRawAnomaly) {
+    // Warning state - check debouncing (continuous duration or frequency count)
+    let durationTrigger = false;
+    if (window.readings.length >= 10) {
+      durationTrigger = window.readings.slice(-10).every(r => r.isRawAnomaly);
+    }
+
+    const recentAnomaliesCount = window.readings.filter(r => r.isRawAnomaly).length;
+    const frequencyTrigger = recentAnomaliesCount >= 5;
+
+    if (durationTrigger || frequencyTrigger) {
+      isAnomaly = true;
+      severity = 'warning';
+      if (durationTrigger) {
+        reasons.push("Duration Trigger: Continuous sensor deviation detected for 10 seconds.");
+      }
+      if (frequencyTrigger) {
+        reasons.push("Frequency Trigger: 5 sensor spikes detected within 60 seconds.");
+      }
+      if (fusionDiagnostic) {
+        reasons.push(fusionDiagnostic);
+      }
+      reasons.push(...rawDeviations);
+    }
+  }
+
+  // Zero-drift tracking logic
   let zeroDriftAdjustment = null;
   if (window.offStartTime && machineBaseline && machineBaseline.current > 0) {
     const offDurationMs = new Date() - window.offStartTime;
@@ -247,17 +394,10 @@ async function analyzeReading(reading, machineBaseline = null) {
     }
   }
 
-  // Add reading to the rolling window
-  const isAnomaly = reasons.length > 0;
-  window.readings.push({ soundEnergy, frequency, current, vibration, isAnomaly, timestamp: new Date() });
-  if (window.readings.length > WINDOW_SIZE) {
-    window.readings.shift();
-  }
-
   // Calculate frequent deviations (> 30% anomalous in the window)
   let frequentDeviations = false;
-  if (window.readings.length >= 20) { // Require at least 20 readings to make a judgement
-    const anomalyCount = window.readings.filter(r => r.isAnomaly).length;
+  if (window.readings.length >= 20) {
+    const anomalyCount = window.readings.filter(r => r.isRawAnomaly).length;
     if (anomalyCount / window.readings.length > 0.3) {
       frequentDeviations = true;
     }
@@ -265,8 +405,8 @@ async function analyzeReading(reading, machineBaseline = null) {
 
   return {
     isAnomaly,
-    reasons,
-    severity: isAnomaly ? severity : 'warning',
+    reasons: [...new Set(reasons)],
+    severity,
     mlUsed,
     frequentDeviations,
     zeroDriftAdjustment
@@ -332,4 +472,16 @@ function getDeviceStatus(deviceId) {
   return statuses;
 }
 
-module.exports = { analyzeReading, checkForStoppages, getDeviceStatus, retrainModel };
+function resetDeviceWindow(deviceId) {
+  if (deviceWindows[deviceId]) {
+    delete deviceWindows[deviceId];
+  }
+}
+
+module.exports = {
+  analyzeReading,
+  checkForStoppages,
+  getDeviceStatus,
+  retrainModel,
+  resetDeviceWindow
+};
