@@ -1,9 +1,11 @@
-import { useState, useEffect } from 'react';
-import { fetchSensorData } from '../api';
+import { useState, useEffect } from "react";
+import { fetchSensorData } from "../api";
 
 const useSensorData = (deviceId) => {
   const [readings, setReadings] = useState([]);
   const [latestReading, setLatestReading] = useState(null);
+  const [baseline, setBaseline] = useState(null);
+  const [machine, setMachine] = useState(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -12,14 +14,32 @@ const useSensorData = (deviceId) => {
     const loadData = async () => {
       try {
         const data = await fetchSensorData(deviceId);
-        // The backend sorts newest first, we might want to reverse it for Recharts (oldest to newest)
-        const reversedData = [...data].reverse();
+
+        // Handle new response structure with baseline and machine
+        let readingsArray = [];
+        let baselineData = null;
+        let machineData = null;
+
+        if (data.readings) {
+          // New structure: { readings, baseline, machine }
+          readingsArray = data.readings;
+          baselineData = data.baseline;
+          machineData = data.machine;
+        } else if (Array.isArray(data)) {
+          // Old structure: simple array
+          readingsArray = data;
+        }
+
+        const reversedData = [...readingsArray].reverse();
         setReadings(reversedData);
-        if (data.length > 0) {
-          setLatestReading(data[0]);
+        setBaseline(baselineData);
+        setMachine(machineData);
+
+        if (readingsArray.length > 0) {
+          setLatestReading(readingsArray[0]);
         }
       } catch (error) {
-        console.error('Failed to load sensor data', error);
+        console.error("Failed to load sensor data", error);
       } finally {
         setLoading(false);
       }
@@ -30,7 +50,7 @@ const useSensorData = (deviceId) => {
     return () => clearInterval(interval);
   }, [deviceId]);
 
-  return { readings, latestReading, loading };
+  return { readings, latestReading, baseline, machine, loading };
 };
 
 export default useSensorData;
