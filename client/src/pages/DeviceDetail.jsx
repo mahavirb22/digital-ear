@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { useParams, Link } from "react-router-dom";
 import {
   LineChart,
@@ -13,7 +13,12 @@ import {
 } from "recharts";
 import useSensorData from "../hooks/useSensorData";
 import useNotifications from "../hooks/useNotifications";
-import { acknowledgeNotification, turnOffMachine, turnOnMachine } from "../api";
+import {
+  acknowledgeNotification,
+  turnOffMachine,
+  turnOnMachine,
+  getMLPrediction,
+} from "../api";
 import toast from "react-hot-toast";
 
 const DeviceDetail = () => {
@@ -21,6 +26,34 @@ const DeviceDetail = () => {
   const { readings, latestReading, baseline, machine, loading } =
     useSensorData(deviceId);
   const { notifications } = useNotifications(deviceId);
+
+  // ML Prediction state
+  const [mlResult, setMlResult] = useState(null);
+  const [mlLoading, setMlLoading] = useState(false);
+
+  // Fetch ML prediction whenever latestReading changes
+  const fetchMLPrediction = useCallback(async () => {
+    if (!machine || !machine.isCalibrated || !latestReading) return;
+    try {
+      setMlLoading(true);
+      const result = await getMLPrediction(machine._id, {
+        soundEnergy: latestReading.soundEnergy,
+        frequency: latestReading.frequency,
+        current: latestReading.current,
+        vibration: latestReading.vibration,
+      });
+      setMlResult(result);
+    } catch (err) {
+      // ML service may be unavailable
+      setMlResult(null);
+    } finally {
+      setMlLoading(false);
+    }
+  }, [machine, latestReading]);
+
+  useEffect(() => {
+    fetchMLPrediction();
+  }, [fetchMLPrediction]);
 
   const handleAcknowledge = async (id) => {
     try {
@@ -101,27 +134,6 @@ const DeviceDetail = () => {
             </div>
           ))}
         </div>
-        {/* Alerts Skeleton */}
-        <div className="glass-card rounded-lg overflow-hidden">
-          <div className="p-md border-b border-white/5">
-            <div className="skeleton h-5 w-52"></div>
-          </div>
-          {[1, 2, 3].map((i) => (
-            <div
-              key={i}
-              className="flex items-center justify-between p-md border-b border-white/5"
-            >
-              <div className="flex items-center gap-4">
-                <div className="skeleton h-5 w-20 rounded"></div>
-                <div className="skeleton h-4 w-64"></div>
-              </div>
-              <div className="flex items-center gap-6">
-                <div className="skeleton h-3 w-16"></div>
-                <div className="skeleton h-7 w-28 rounded"></div>
-              </div>
-            </div>
-          ))}
-        </div>
       </div>
     );
   }
@@ -129,7 +141,7 @@ const DeviceDetail = () => {
   const isAnomaly = latestReading.isAnomaly;
   const isMachineOff = machine && machine.status === "scheduled_off";
 
-  // Calculate baseline ranges (±20% from baseline)
+  // Baseline comparison results
   const getBaselineRange = (baselineValue, margin = 0.2) => {
     if (!baselineValue) return { min: 0, max: 0 };
     return {
@@ -137,6 +149,25 @@ const DeviceDetail = () => {
       max: baselineValue * (1 + margin),
     };
   };
+
+  const isOutOfRange = (value, baseValue, margin = 0.3) => {
+    if (!baseValue) return false;
+    return value > baseValue * (1 + margin) || value < baseValue * (1 - margin);
+  };
+
+  // Compute baseline anomaly
+  const baselineAnomaly = baseline
+    ? isOutOfRange(latestReading.soundEnergy, baseline.soundEnergy) ||
+      isOutOfRange(latestReading.current, baseline.current, 0.15)
+    : false;
+
+  // ML anomaly
+  const mlAnomaly = mlResult ? mlResult.isAnomaly : false;
+  const mlReason = mlResult?.reason || mlResult?.message || "";
+
+  // Combined verdict
+  const combinedAnomaly = baselineAnomaly && mlAnomaly;
+  const eitherAnomaly = baselineAnomaly || mlAnomaly;
 
   return (
     <div className="space-y-lg">
@@ -366,6 +397,186 @@ const DeviceDetail = () => {
           )}
         </div>
       </div>
+
+      {/* Anomaly Analysis Panel — Baseline + ML + Combined */}
+      {machine && machine.isCalibrated && (
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-gutter">
+          {/* Baseline Comparison */}
+          <div className={`glass-card p-md rounded-lg border ${baselineAnomaly ? 'border-error/50' : 'border-green-500/30'}`}>
+            <div className="flex items-center gap-2 mb-md">
+              <span className={`material-symbols-outlined text-[22px] ${baselineAnomaly ? 'text-error' : 'text-green-400'}`}>
+                compare_arrows
+              </span>
+              <h3 className="font-label text-label text-on-surface uppercase tracking-widest">
+                Baseline Comparison
+              </h3>
+            </div>
+            <div className={`flex items-center gap-2 px-3 py-2 rounded-lg mb-md ${baselineAnomaly ? 'bg-error/15 text-error' : 'bg-green-500/15 text-green-400'}`}>
+              <span className={`w-2.5 h-2.5 rounded-full ${baselineAnomaly ? 'bg-error animate-pulse' : 'bg-green-500'}`}></span>
+              <span className="font-label text-[13px] uppercase tracking-wider font-bold">
+                {baselineAnomaly ? 'Deviation Detected' : 'Within Normal Range'}
+              </span>
+            </div>
+            <div className="space-y-xs text-[12px]">
+              <div className="flex justify-between">
+                <span className="text-outline">Sound</span>
+                <span className={isOutOfRange(latestReading.soundEnergy, baseline.soundEnergy) ? 'text-error font-bold' : 'text-green-400'}>
+                  {latestReading.soundEnergy.toFixed(0)} / {baseline.soundEnergy.toFixed(0)}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-outline">Current</span>
+                <span className={isOutOfRange(latestReading.current, baseline.current, 0.15) ? 'text-error font-bold' : 'text-green-400'}>
+                  {latestReading.current.toFixed(2)}A / {baseline.current.toFixed(2)}A
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-outline">Vibration</span>
+                <span className="text-on-surface">{latestReading.vibration}</span>
+              </div>
+            </div>
+          </div>
+
+          {/* ML Prediction */}
+          <div className={`glass-card p-md rounded-lg border ${mlAnomaly ? 'border-error/50' : mlResult ? 'border-blue-500/30' : 'border-white/10'}`}>
+            <div className="flex items-center gap-2 mb-md">
+              <span className={`material-symbols-outlined text-[22px] ${mlAnomaly ? 'text-error' : 'text-blue-400'}`}>
+                smart_toy
+              </span>
+              <h3 className="font-label text-label text-on-surface uppercase tracking-widest">
+                ML Model Analysis
+              </h3>
+            </div>
+            {mlResult ? (
+              <>
+                {/* Trained / Not Trained badge */}
+                <div className={`flex items-center gap-2 px-3 py-1.5 rounded-lg mb-sm text-[11px] ${mlResult.trained ? 'bg-blue-500/10 text-blue-400' : 'bg-warning/10 text-warning'}`}>
+                  <span className="material-symbols-outlined text-[14px]">
+                    {mlResult.trained ? 'model_training' : 'warning'}
+                  </span>
+                  <span className="uppercase tracking-wider font-bold">
+                    {mlResult.trained ? 'Model Trained' : 'Not Calibrated'}
+                  </span>
+                  {mlResult.algorithm && (
+                    <span className="ml-auto text-outline text-[10px]">{mlResult.algorithm}</span>
+                  )}
+                </div>
+
+                {/* Status Badge */}
+                <div className={`flex items-center gap-2 px-3 py-2 rounded-lg mb-md ${mlAnomaly ? 'bg-error/15 text-error' : 'bg-green-500/15 text-green-400'}`}>
+                  <span className={`w-2.5 h-2.5 rounded-full ${mlAnomaly ? 'bg-error animate-pulse' : 'bg-green-500'}`}></span>
+                  <span className="font-label text-[13px] uppercase tracking-wider font-bold">
+                    {mlAnomaly ? 'Anomaly Detected' : 'Normal Operation'}
+                  </span>
+                  {mlResult.anomalyCount !== undefined && (
+                    <span className="ml-auto text-[11px] text-outline">
+                      {mlResult.anomalyCount}/{mlResult.totalSensors || 4} sensors flagged
+                    </span>
+                  )}
+                </div>
+
+                {/* Per-sensor deviations from server */}
+                {mlResult.deviations && mlResult.deviations.length > 0 && (
+                  <div className="space-y-xs mb-md">
+                    <div className="text-[10px] text-outline uppercase tracking-widest mb-xs">Sensor Analysis</div>
+                    {mlResult.deviations.map((d) => (
+                      <div key={d.sensor} className="flex items-center justify-between text-[12px]">
+                        <span className="text-outline w-24">{d.sensor}</span>
+                        <div className="flex items-center gap-2">
+                          <span className={`font-mono ${d.status === 'anomaly' ? 'text-error font-bold' : d.status === 'warning' ? 'text-warning' : 'text-on-surface'}`}>
+                            {typeof d.live === 'number' ? (d.sensor === 'Current' ? d.live.toFixed(2) : d.live.toFixed(0)) : d.live}
+                          </span>
+                          <span className="text-outline-variant">/</span>
+                          <span className="text-outline font-mono">
+                            {typeof d.baseline === 'number' ? (d.sensor === 'Current' ? d.baseline.toFixed(2) : d.baseline.toFixed(0)) : d.baseline}
+                          </span>
+                          <span className={`text-[10px] px-1.5 py-0.5 rounded font-bold ${
+                            d.status === 'anomaly' ? 'bg-error/20 text-error' 
+                            : d.status === 'warning' ? 'bg-warning/20 text-warning' 
+                            : 'bg-green-500/10 text-green-400'
+                          }`}>
+                            {d.deviation >= 0 ? '+' : ''}{d.deviation}%
+                          </span>
+                          <span className={`material-symbols-outlined text-[14px] ${
+                            d.status === 'anomaly' ? 'text-error' 
+                            : d.status === 'warning' ? 'text-warning' 
+                            : 'text-green-400'
+                          }`}>
+                            {d.status === 'anomaly' ? 'error' : d.status === 'warning' ? 'warning' : 'check_circle'}
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* Reason from model */}
+                <div className="pt-sm border-t border-white/10">
+                  <div className="text-[10px] text-outline uppercase tracking-widest mb-xs">Diagnosis</div>
+                  <p className={`text-[12px] flex items-start gap-1 ${mlAnomaly ? 'text-error' : 'text-green-400'}`}>
+                    <span className="material-symbols-outlined text-[14px] mt-px shrink-0">
+                      {mlAnomaly ? 'warning' : 'check_circle'}
+                    </span>
+                    <span>{mlResult.reason || mlReason || 'No diagnosis available'}</span>
+                  </p>
+                </div>
+              </>
+            ) : (
+              <div className="flex flex-col items-center justify-center py-lg text-outline">
+                <span className="material-symbols-outlined text-[32px] mb-sm opacity-40">
+                  cloud_off
+                </span>
+                <span className="text-[12px]">{mlLoading ? 'Loading prediction...' : 'Calibrate machine to enable ML analysis'}</span>
+              </div>
+            )}
+          </div>
+
+          {/* Combined Verdict */}
+          <div className={`glass-card p-md rounded-lg border-2 ${combinedAnomaly ? 'border-error/70 bg-error/5' : eitherAnomaly ? 'border-warning/50 bg-warning/5' : 'border-green-500/40 bg-green-500/5'}`}>
+            <div className="flex items-center gap-2 mb-md">
+              <span className={`material-symbols-outlined text-[22px] ${combinedAnomaly ? 'text-error' : eitherAnomaly ? 'text-warning' : 'text-green-400'}`}>
+                {combinedAnomaly ? 'gpp_bad' : eitherAnomaly ? 'shield' : 'verified_user'}
+              </span>
+              <h3 className="font-label text-label text-on-surface uppercase tracking-widest">
+                Combined Verdict
+              </h3>
+            </div>
+            <div className={`flex items-center gap-2 px-3 py-2 rounded-lg mb-md ${combinedAnomaly ? 'bg-error/20 text-error' : eitherAnomaly ? 'bg-warning/20 text-warning' : 'bg-green-500/20 text-green-400'}`}>
+              <span className={`w-2.5 h-2.5 rounded-full ${combinedAnomaly ? 'bg-error animate-pulse' : eitherAnomaly ? 'bg-warning animate-pulse' : 'bg-green-500'}`}></span>
+              <span className="font-label text-[13px] uppercase tracking-wider font-bold">
+                {combinedAnomaly
+                  ? 'Confirmed Anomaly'
+                  : eitherAnomaly
+                    ? 'Under Investigation'
+                    : 'System Healthy'}
+              </span>
+            </div>
+            <div className="space-y-xs text-[12px]">
+              <div className="flex items-center gap-2">
+                <span className={`material-symbols-outlined text-[16px] ${baselineAnomaly ? 'text-error' : 'text-green-400'}`}>
+                  {baselineAnomaly ? 'close' : 'check'}
+                </span>
+                <span className="text-outline">Baseline: {baselineAnomaly ? 'Deviation' : 'Normal'}</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className={`material-symbols-outlined text-[16px] ${mlAnomaly ? 'text-error' : mlResult ? 'text-green-400' : 'text-outline'}`}>
+                  {mlAnomaly ? 'close' : mlResult ? 'check' : 'remove'}
+                </span>
+                <span className="text-outline">ML Model: {mlResult ? (mlAnomaly ? 'Anomaly' : 'Healthy') : 'N/A'}</span>
+              </div>
+              <div className="mt-sm pt-sm border-t border-white/10">
+                <p className="text-[11px] text-outline-variant">
+                  {combinedAnomaly
+                    ? '⚠️ Both systems agree: Maintenance is required immediately.'
+                    : eitherAnomaly
+                      ? '🔍 One system flagged an issue. Monitor closely before taking action.'
+                      : '✅ Both systems agree: Machine is operating within healthy parameters.'}
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Charts Section */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-gutter">

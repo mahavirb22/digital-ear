@@ -95,11 +95,13 @@ exports.saveReading = async (req, res) => {
 
     const machineBaseline = device.attachedMachine.baseline;
     const machineStatus = device.attachedMachine.status || "running";
+    const machineName = device.attachedMachine.name;
 
     const analysis = await analyzeReading(
       { deviceId, soundEnergy, frequency, vibration, current },
       machineBaseline,
       machineStatus,
+      machineName
     );
 
     const newReading = new SensorReading({
@@ -335,10 +337,12 @@ exports.saveBatchReadings = async (req, res) => {
       let isAnomaly = false;
       if (isCalibrated) {
         const batchMachineStatus = device.attachedMachine.status || "running";
+        const machineName = device.attachedMachine.name;
         const analysis = await analyzeReading(
           { deviceId, ...reading },
           machineBaseline,
           batchMachineStatus,
+          machineName
         );
         isAnomaly = analysis.isAnomaly;
         if (isAnomaly) anyAnomaly = true;

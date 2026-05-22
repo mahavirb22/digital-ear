@@ -1,16 +1,17 @@
-require('dotenv').config();
-const express = require('express');
-const cors = require('cors');
-const connectDB = require('./config/db');
-const setupWebPush = require('./config/webpush');
+require("dotenv").config();
+const express = require("express");
+const cors = require("cors");
+const connectDB = require("./config/db");
+const setupWebPush = require("./config/webpush");
 
 // Import routes
-const dataRoutes = require('./routes/data');
-const notificationRoutes = require('./routes/notifications');
-const authRoutes = require('./routes/auth');
-const deviceRoutes = require('./routes/devices');
-const mlRoutes = require('./routes/ml');
-const machineRoutes = require('./routes/machineRoutes');
+const dataRoutes = require("./routes/data");
+const notificationRoutes = require("./routes/notifications");
+const authRoutes = require("./routes/auth");
+const deviceRoutes = require("./routes/devices");
+const mlRoutes = require("./routes/ml");
+const machineRoutes = require("./routes/machineRoutes");
+const calibrationRoutes = require("./routes/calibrationRoutes");
 
 // Initialize app
 const app = express();
@@ -25,12 +26,13 @@ app.use(cors());
 app.use(express.json());
 
 // Routes
-app.use('/api', dataRoutes);
-app.use('/api', notificationRoutes);
-app.use('/api/auth', authRoutes);
-app.use('/api/devices', deviceRoutes);
-app.use('/api/machines', machineRoutes);
-app.use('/api/ml', mlRoutes);
+app.use("/api", dataRoutes);
+app.use("/api", notificationRoutes);
+app.use("/api/auth", authRoutes);
+app.use("/api/devices", deviceRoutes);
+app.use("/api/machines", machineRoutes);
+app.use("/api/ml", mlRoutes);
+app.use("/api/calibrate", calibrationRoutes);
 
 // Start server
 app.listen(PORT, () => {

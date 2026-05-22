@@ -62,12 +62,14 @@ function computeStats(values) {
 }
 
 /**
- * Get ML prediction from the Python service.
+ * Get ML prediction from the Python service using per-machine model.
  */
-async function getMLPrediction(reading) {
+async function getMLPrediction(reading, machineName) {
+  if (!machineName) return null; // Need machine name for per-machine model
+  
   try {
     const res = await axios.post(
-      `${ML_SERVICE_URL}/predict`,
+      `${ML_SERVICE_URL}/machine/${machineName}/predict`,
       {
         soundEnergy: reading.soundEnergy,
         frequency: reading.frequency,
@@ -78,7 +80,7 @@ async function getMLPrediction(reading) {
     );
     return res.data;
   } catch (err) {
-    mlServiceAvailable = false;
+    // We don't mark mlServiceAvailable=false globally just because one machine model fails
     return null;
   }
 }
@@ -149,6 +151,7 @@ async function analyzeReading(
   reading,
   machineBaseline = null,
   machineStatus = "running",
+  machineName = null
 ) {
   const { deviceId, soundEnergy, frequency, current, vibration } = reading;
 
@@ -340,7 +343,7 @@ async function analyzeReading(
 
   if (!isStoppage) {
     if (mlServiceAvailable) {
-      const mlResult = await getMLPrediction(reading);
+      const mlResult = await getMLPrediction(reading, machineName);
       if (mlResult) {
         mlUsed = true;
         if (mlResult.isAnomaly) {
@@ -369,6 +372,21 @@ async function analyzeReading(
   }
 
   // 5. Multi-Sensor Fusion Logic
+  // Compute sensor state variables needed by fusion and deviation checks
+  const isCurrentHigh = machineBaseline
+    ? current > Math.max(machineBaseline.current * 1.25, 0.8)
+    : current > 0.85;
+
+  const isVibrationNormal = vibration === "DETECTED";
+  const isVibrationHigh = vibration === "HIGH";
+
+  // Audio quality check: ONLY based on sound energy (frequency is independent, never compared to baseline)
+  const isAudioHigh = machineBaseline
+    ? soundEnergy > Math.max(machineBaseline.soundEnergy * 1.25, 45000)
+    : soundEnergy > 45000;
+
+  const isAudioNormal = !isAudioHigh;
+
   // CRITICAL: Require 2+ sensor deviations to trigger anomaly (avoid false positives from background noise)
   // Valid combinations:
   //   - Sound + Vibration deviation = potential mechanical issue
@@ -407,19 +425,6 @@ async function analyzeReading(
   }
 
   // 5b. Multivariate Sensor Fusion (Correlation Logic)
-  const isCurrentHigh = machineBaseline
-    ? current > Math.max(machineBaseline.current * 1.25, 0.8)
-    : current > 0.85;
-
-  const isVibrationNormal = vibration === "DETECTED";
-  const isVibrationHigh = vibration === "HIGH";
-
-  // Audio quality check: ONLY based on sound energy (frequency is independent, never compared to baseline)
-  const isAudioHigh = machineBaseline
-    ? soundEnergy > Math.max(machineBaseline.soundEnergy * 1.25, 45000)
-    : soundEnergy > 45000;
-
-  const isAudioNormal = !isAudioHigh;
 
   let fusionDiagnostic = null;
   let fusionSeverity = null;

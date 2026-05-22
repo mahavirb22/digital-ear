@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { fetchMachines, createMachine, startCalibration, fetchRegisteredDevices } from '../api';
+import React, { useState, useEffect, useRef } from 'react';
+import { fetchMachines, createMachine, startCalibration, startMLCalibration, addMLCalibrationSample, finalizeMLCalibration, fetchRegisteredDevices, fetchSensorData } from '../api';
 import toast from 'react-hot-toast';
 
 const CalibrationModal = ({ onClose }) => {
@@ -12,10 +12,15 @@ const CalibrationModal = ({ onClose }) => {
   
   const [isCalibrating, setIsCalibrating] = useState(false);
   const [timeLeft, setTimeLeft] = useState(0);
+  const [phase, setPhase] = useState(''); // 'collecting', 'finalizing'
   const CALIBRATION_DURATION = 120; // 120 seconds
+  const sampleTimerRef = useRef(null);
 
   useEffect(() => {
     loadData();
+    return () => {
+      if (sampleTimerRef.current) clearInterval(sampleTimerRef.current);
+    };
   }, []);
 
   const loadData = async () => {
@@ -54,19 +59,56 @@ const CalibrationModal = ({ onClose }) => {
     }
 
     try {
-      await startCalibration(machineId, selectedDeviceId, CALIBRATION_DURATION);
       setIsCalibrating(true);
+      setPhase('collecting');
       setTimeLeft(CALIBRATION_DURATION);
-      toast.success('Calibration started. Please ensure the machine is running normally.');
+
+      // Start BOTH calibrations simultaneously
+      const results = await Promise.allSettled([
+        startCalibration(machineId, selectedDeviceId, CALIBRATION_DURATION),
+        startMLCalibration(machineId)
+      ]);
+      
+      const baselineOk = results[0].status === 'fulfilled';
+      const mlOk = results[1].status === 'fulfilled';
+      
+      if (!baselineOk && !mlOk) {
+        throw new Error('Both calibrations failed to start');
+      }
+
+      toast.success(`Calibration started${mlOk ? ' (Baseline + ML)' : ' (Baseline only — ML unavailable)'}`);
+
+      // Start sending ML samples every 2 seconds using live sensor data
+      if (mlOk) {
+        sampleTimerRef.current = setInterval(async () => {
+          try {
+            const data = await fetchSensorData(selectedDeviceId);
+            const reading = data.readings ? data.readings[0] : (Array.isArray(data) ? data[0] : null);
+            if (reading) {
+              await addMLCalibrationSample(machineId, {
+                soundEnergy: reading.soundEnergy,
+                frequency: reading.frequency,
+                current: reading.current,
+                vibration: reading.vibration,
+              });
+            }
+          } catch (err) {
+            // Silently continue — samples may fail intermittently
+          }
+        }, 2000);
+      }
 
       // Start countdown
       const timer = setInterval(() => {
         setTimeLeft(prev => {
           if (prev <= 1) {
             clearInterval(timer);
-            setIsCalibrating(false);
-            toast.success('Calibration complete!');
-            setTimeout(onClose, 1500);
+            if (sampleTimerRef.current) {
+              clearInterval(sampleTimerRef.current);
+              sampleTimerRef.current = null;
+            }
+            // Finalize both
+            handleFinalize(machineId, mlOk);
             return 0;
           }
           return prev - 1;
@@ -74,7 +116,36 @@ const CalibrationModal = ({ onClose }) => {
       }, 1000);
       
     } catch (error) {
-      toast.error(error.response?.data?.error || 'Failed to start calibration');
+      toast.error(error.response?.data?.error || error.message || 'Failed to start calibration');
+      setIsCalibrating(false);
+      setPhase('');
+    }
+  };
+
+  const handleFinalize = async (machineId, mlOk) => {
+    setPhase('finalizing');
+    try {
+      // Finalize ML calibration if it was started
+      if (mlOk) {
+        try {
+          await finalizeMLCalibration(machineId);
+        } catch (err) {
+          console.warn('ML finalization failed (baseline calibration may still succeed):', err.message);
+        }
+      }
+
+      // Baseline calibration auto-finalizes on the server after the timer expires
+      // Wait a moment for it to complete
+      await new Promise(resolve => setTimeout(resolve, 2000));
+
+      setIsCalibrating(false);
+      setPhase('');
+      toast.success('Calibration complete! Baseline & ML model updated.');
+      setTimeout(onClose, 1500);
+    } catch (error) {
+      toast.error('Calibration finalization encountered issues');
+      setIsCalibrating(false);
+      setPhase('');
     }
   };
 
@@ -110,15 +181,21 @@ const CalibrationModal = ({ onClose }) => {
               </svg>
               <span className="font-data-lg text-h1 text-primary">{timeLeft}s</span>
             </div>
+            <div className="flex items-center gap-2 mb-md">
+              <span className={`inline-block w-2 h-2 rounded-full ${phase === 'finalizing' ? 'bg-yellow-400 animate-pulse' : 'bg-green-400 animate-pulse'}`}></span>
+              <span className="font-label text-label text-outline uppercase tracking-widest">
+                {phase === 'finalizing' ? 'Finalizing Models...' : 'Collecting Data (Baseline + ML)'}
+              </span>
+            </div>
             <p className="font-body text-body text-center text-on-surface-variant max-w-xs">
-              Gathering normal operational baseline. <br/>
+              Gathering normal operational baseline & training ML model. <br/>
               <span className="text-warning">Please keep the machine running normally.</span>
             </p>
           </div>
         ) : (
           <div className="flex flex-col gap-md">
             <p className="font-body-sm text-body-sm text-outline mb-sm">
-              Attach a sensor device to a machine and calibrate it to establish a baseline. Anomaly detection will be tuned to this specific machine's normal state.
+              This will run <strong>both</strong> baseline calibration and ML model training simultaneously. Attach a sensor device to a machine and keep it running normally for 120 seconds.
             </p>
 
             {/* Select Device */}
@@ -176,7 +253,7 @@ const CalibrationModal = ({ onClose }) => {
               className="w-full bg-primary text-on-primary font-label text-label uppercase tracking-widest py-md rounded-lg hover:bg-primary-fixed transition-colors mt-lg flex items-center justify-center gap-xs"
             >
               <span className="material-symbols-outlined text-[18px]">play_circle</span>
-              Start 120s Calibration
+              Start Calibration (Baseline + ML)
             </button>
           </div>
         )}
