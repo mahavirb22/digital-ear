@@ -64,6 +64,100 @@ int baseline = 0;
 bool calibrated = false;
 
 // =====================================================
+// ================= OFFLINE BUFFER ====================
+// =====================================================
+
+#define BUFFER_SIZE 120
+
+struct Reading {
+  float soundEnergy;
+  float frequency;
+  char vibration[16];
+  float current;
+};
+
+Reading offlineBuffer[BUFFER_SIZE];
+int bufferHead = 0;
+int bufferTail = 0;
+int bufferCount = 0;
+
+void pushReading(float soundEnergy, float frequency, String vibration, float current) {
+  offlineBuffer[bufferHead].soundEnergy = soundEnergy;
+  offlineBuffer[bufferHead].frequency = frequency;
+  strncpy(offlineBuffer[bufferHead].vibration, vibration.c_str(), sizeof(offlineBuffer[bufferHead].vibration) - 1);
+  offlineBuffer[bufferHead].vibration[sizeof(offlineBuffer[bufferHead].vibration) - 1] = '\0';
+  offlineBuffer[bufferHead].current = current;
+
+  bufferHead = (bufferHead + 1) % BUFFER_SIZE;
+  if (bufferCount < BUFFER_SIZE) {
+    bufferCount++;
+  } else {
+    bufferTail = (bufferTail + 1) % BUFFER_SIZE;
+  }
+}
+
+bool sendBatchToServer() {
+  if (WiFi.status() != WL_CONNECTED) {
+    return false;
+  }
+
+  HTTPClient http;
+  String batchUrl = String(SERVER_URL) + "/batch";
+  http.begin(batchUrl);
+  http.addHeader("Content-Type", "application/json");
+
+  #if ARDUINOJSON_VERSION_MAJOR >= 7
+    JsonDocument doc;
+  #else
+    DynamicJsonDocument doc(16384);
+  #endif
+
+  doc["deviceId"] = DEVICE_ID;
+  
+  #if ARDUINOJSON_VERSION_MAJOR >= 7
+    JsonArray readingsArray = doc["readings"].to<JsonArray>();
+  #else
+    JsonArray readingsArray = doc.createNestedArray("readings");
+  #endif
+
+  int tempTail = bufferTail;
+  for (int i = 0; i < bufferCount; i++) {
+    #if ARDUINOJSON_VERSION_MAJOR >= 7
+      JsonObject readingObj = readingsArray.add<JsonObject>();
+    #else
+      JsonObject readingObj = readingsArray.createNestedObject();
+    #endif
+    readingObj["soundEnergy"] = offlineBuffer[tempTail].soundEnergy;
+    readingObj["frequency"] = offlineBuffer[tempTail].frequency;
+    readingObj["vibration"] = String(offlineBuffer[tempTail].vibration);
+    readingObj["current"] = offlineBuffer[tempTail].current;
+    
+    tempTail = (tempTail + 1) % BUFFER_SIZE;
+  }
+
+  String requestBody;
+  serializeJson(doc, requestBody);
+
+  Serial.print("Sending batch payload (count=");
+  Serial.print(bufferCount);
+  Serial.println(")...");
+
+  int httpResponseCode = http.POST(requestBody);
+
+  bool success = false;
+  if (httpResponseCode == 200 || httpResponseCode == 201) {
+    Serial.println("🌐 Batch upload success!");
+    success = true;
+  } else {
+    Serial.print("❌ Error sending batch: ");
+    Serial.println(httpResponseCode);
+  }
+
+  http.end();
+  return success;
+}
+
+// =====================================================
 // ================= WIFI FUNCTIONS =====================
 // =====================================================
 
@@ -442,7 +536,26 @@ void loop() {
   // ================= SERVER DATA SEND ==================
   // =====================================================
   String vibStatus = (vibrationIntensity > 0) ? "DETECTED" : "NORMAL";
-  sendDataToServer((float)energy, (float)freq, vibStatus, current);
+  
+  if (WiFi.status() == WL_CONNECTED) {
+    if (bufferCount > 0) {
+      Serial.print("📶 WiFi connected. Uploading ");
+      Serial.print(bufferCount);
+      Serial.println(" cached readings...");
+      if (sendBatchToServer()) {
+        bufferHead = 0;
+        bufferTail = 0;
+        bufferCount = 0;
+        Serial.println("🧹 Buffer cleared.");
+      } else {
+        Serial.println("⚠️ Batch upload failed. Offline data retained.");
+      }
+    }
+    sendDataToServer((float)energy, (float)freq, vibStatus, current);
+  } else {
+    Serial.println("⚠️ WiFi offline. Buffering reading...");
+    pushReading((float)energy, (float)freq, vibStatus, current);
+  }
 
   delay(1000);
 }

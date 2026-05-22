@@ -10,4 +10,14 @@ const sensorReadingSchema = new mongoose.Schema({
   isAnomaly: { type: Boolean, default: false }
 });
 
+sensorReadingSchema.pre('validate', function () {
+  if (this.vibration === 'DETECTED' || this.vibration === 'NORMAL') {
+    return;
+  }
+  const val = Number(this.vibration);
+  if (!isNaN(val)) {
+    this.vibration = val > 0 ? 'DETECTED' : 'NORMAL';
+  }
+});
+
 module.exports = mongoose.model('SensorReading', sensorReadingSchema);

@@ -118,23 +118,66 @@ async function analyzeReading(reading, machineBaseline = null) {
 
   // Initialize device window if needed
   if (!deviceWindows[deviceId]) {
-    deviceWindows[deviceId] = { readings: [], lastSeen: new Date() };
+    deviceWindows[deviceId] = { readings: [], lastSeen: new Date(), offStartTime: null };
   }
 
   const window = deviceWindows[deviceId];
   window.lastSeen = new Date();
+
+  // Initialize offStartTime from DB if the machine is off/stopped and we don't have it in memory
+  if (!window.offStartTime && vibration === 'NORMAL') {
+    try {
+      const SensorReading = require('../models/SensorReading');
+      const lastActive = await SensorReading.findOne({
+        deviceId,
+        vibration: 'DETECTED'
+      }).sort({ timestamp: -1 });
+
+      if (lastActive) {
+        const firstOff = await SensorReading.findOne({
+          deviceId,
+          vibration: 'NORMAL',
+          timestamp: { $gt: lastActive.timestamp }
+        }).sort({ timestamp: 1 });
+        window.offStartTime = firstOff ? firstOff.timestamp : new Date();
+      } else {
+        const oldestOff = await SensorReading.findOne({
+          deviceId,
+          vibration: 'NORMAL'
+        }).sort({ timestamp: 1 });
+        window.offStartTime = oldestOff ? oldestOff.timestamp : new Date();
+      }
+    } catch (err) {
+      console.error('[Anomaly] Failed to fetch offStartTime from DB:', err);
+    }
+  }
 
   const reasons = [];
   let severity = 'warning';
   let mlUsed = false;
 
   // --- Layer 0: Vibration (Machine Stoppage) Check ---
+  let isStopped = false;
   if (vibration === 'NORMAL') {
-    // If no vibration, the machine is not running -> Anomaly Detected
-    reasons.push("Machine is not running (No vibration detected)");
-    severity = 'critical';
+    if (!machineBaseline || machineBaseline.vibrationLevel > 0.1) {
+      isStopped = true;
+      reasons.push("Machine is not running (No vibration detected)");
+      severity = 'critical';
+    } else {
+      // Vibration-less machine: fallback to checking current
+      if (machineBaseline.current > 0.1 && current < 0.1) {
+        isStopped = true;
+        reasons.push("Machine is not running (Zero current detected)");
+        severity = 'critical';
+      }
+    }
+  }
+  
+  if (isStopped) {
+    if (!window.offStartTime) window.offStartTime = new Date();
   } else {
-    // Vibration is DETECTED -> Machine is running normally -> Check other parameters for anomalies
+    window.offStartTime = null;
+    // Machine is running normally -> Check other parameters for anomalies
     
     // --- Layer 1: Hard Threshold Checks (always active) ---
     if (soundEnergy > HARD_THRESHOLDS.soundEnergy.max) {
@@ -196,6 +239,14 @@ async function analyzeReading(reading, machineBaseline = null) {
     }
   }
 
+  let zeroDriftAdjustment = null;
+  if (window.offStartTime && machineBaseline && machineBaseline.current > 0) {
+    const offDurationMs = new Date() - window.offStartTime;
+    if (offDurationMs > 5 * 60 * 1000) { // 5 minutes
+      zeroDriftAdjustment = machineBaseline.current * 0.99 + current * 0.01;
+    }
+  }
+
   // Add reading to the rolling window
   const isAnomaly = reasons.length > 0;
   window.readings.push({ soundEnergy, frequency, current, vibration, isAnomaly, timestamp: new Date() });
@@ -217,7 +268,8 @@ async function analyzeReading(reading, machineBaseline = null) {
     reasons,
     severity: isAnomaly ? severity : 'warning',
     mlUsed,
-    frequentDeviations
+    frequentDeviations,
+    zeroDriftAdjustment
   };
 }
 
@@ -247,7 +299,7 @@ function checkForStoppages() {
     if (elapsed > STOPPAGE_TIMEOUT_MS && window.readings.length > 0) {
       stoppedDevices.push({
         deviceId,
-        message: `Device ${deviceId} stopped sending data ${Math.floor(elapsed / 1000)}s ago. Possible machine stoppage.`,
+        message: `Network Offline: Device ${deviceId} stopped sending data ${Math.floor(elapsed / 1000)}s ago.`,
       });
     }
   }

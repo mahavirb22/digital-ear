@@ -46,6 +46,8 @@ exports.startCalibration = async (req, res) => {
     await device.save();
 
     machine.deviceAttached = device._id;
+    machine.calibrationStatus = 'calibrating';
+    machine.calibrationError = null;
     await machine.save();
 
     // Start memory buffering
@@ -82,6 +84,45 @@ exports.markMaintenanceComplete = async (req, res) => {
     res.status(200).json({ message: 'Maintenance marked as complete', machine });
   } catch (error) {
     console.error('Error marking maintenance complete:', error);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+};
+
+exports.turnOffMachine = async (req, res) => {
+  try {
+    const { machineId } = req.params;
+    const machine = await Machine.findById(machineId);
+    
+    if (!machine) return res.status(404).json({ error: 'Machine not found' });
+    
+    machine.status = 'scheduled_off';
+    await machine.save();
+    
+    res.status(200).json({ message: 'Machine scheduled to turn off', machine });
+  } catch (error) {
+    console.error('Error turning off machine:', error);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+};
+
+exports.updateMachineStatus = async (req, res) => {
+  try {
+    const { machineId } = req.params;
+    const { status } = req.body;
+    
+    if (!status || !['running', 'scheduled_off'].includes(status)) {
+      return res.status(400).json({ error: 'Invalid or missing status' });
+    }
+    
+    const machine = await Machine.findById(machineId);
+    if (!machine) return res.status(404).json({ error: 'Machine not found' });
+    
+    machine.status = status;
+    await machine.save();
+    
+    res.status(200).json({ message: `Machine status updated to ${status}`, machine });
+  } catch (error) {
+    console.error('Error updating machine status:', error);
     res.status(500).json({ error: 'Internal Server Error' });
   }
 };

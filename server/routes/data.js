@@ -3,6 +3,7 @@ const router = express.Router();
 const dataController = require('../controllers/dataController');
 
 router.post('/data', dataController.saveReading);
+router.post('/data/batch', dataController.saveBatchReadings);
 router.get('/data/active-devices', dataController.getDevices);
 router.get('/data/:deviceId', dataController.getDeviceReadings);
 

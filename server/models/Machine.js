@@ -3,7 +3,10 @@ const mongoose = require('mongoose');
 const machineSchema = new mongoose.Schema({
   name: { type: String, required: true, unique: true, trim: true },
   deviceAttached: { type: mongoose.Schema.Types.ObjectId, ref: 'Device', default: null },
+  status: { type: String, enum: ['running', 'scheduled_off'], default: 'running' },
   isCalibrated: { type: Boolean, default: false },
+  calibrationStatus: { type: String, enum: ['none', 'calibrating', 'ready', 'failed'], default: 'none' },
+  calibrationError: { type: String, default: null },
   needsMaintenance: { type: Boolean, default: false },
   baseline: {
     soundEnergy: { type: Number, default: 0 },

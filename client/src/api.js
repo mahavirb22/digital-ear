@@ -21,5 +21,6 @@ export const fetchMachines = () => api.get('/machines').then(res => res.data);
 export const createMachine = (name) => api.post('/machines', { name }).then(res => res.data);
 export const startCalibration = (machineId, deviceId, durationSeconds) => api.post(`/machines/${machineId}/calibrate`, { deviceId, durationSeconds }).then(res => res.data);
 export const markMaintenanceComplete = (machineId) => api.patch(`/machines/${machineId}/maintenance-complete`).then(res => res.data);
+export const turnOffMachine = (machineId) => api.patch(`/machines/${machineId}/turn-off`).then(res => res.data);
 
 export default api;

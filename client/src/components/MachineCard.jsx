@@ -1,7 +1,7 @@
 import React from 'react';
 import { Link } from 'react-router-dom';
 import useSensorData from '../hooks/useSensorData';
-import { markMaintenanceComplete } from '../api';
+import { markMaintenanceComplete, turnOffMachine } from '../api';
 import toast from 'react-hot-toast';
 
 const MachineCard = ({ machine, onRefresh }) => {
@@ -21,8 +21,24 @@ const MachineCard = ({ machine, onRefresh }) => {
     }
   };
 
+  const handleTurnOff = async () => {
+    try {
+      await turnOffMachine(machine._id);
+      toast.success('Machine status set to Scheduled Off!');
+      if (onRefresh) onRefresh();
+    } catch (err) {
+      toast.error('Failed to schedule machine turn off');
+    }
+  };
+
   return (
-    <div className={`glass-panel p-md rounded-lg flex flex-col gap-sm border transition-colors relative overflow-hidden group ${isCritical ? 'border-error shadow-[0_0_15px_rgba(255,82,82,0.2)] pulse-danger' : 'border-primary/10 hover:border-primary/30'}`}>
+    <div className={`glass-panel p-md rounded-lg flex flex-col gap-sm border transition-colors relative overflow-hidden group ${
+      isCritical 
+        ? 'border-error shadow-[0_0_15px_rgba(255,82,82,0.2)] pulse-danger' 
+        : machine.status === 'scheduled_off'
+        ? 'border-white/5 opacity-75 hover:opacity-100 hover:border-white/10'
+        : 'border-primary/10 hover:border-primary/30'
+    }`}>
       {isCritical && (
         <div className="absolute top-0 right-0 w-24 h-24 bg-error/20 blur-2xl rounded-full translate-x-1/2 -translate-y-1/2"></div>
       )}
@@ -38,10 +54,31 @@ const MachineCard = ({ machine, onRefresh }) => {
             {machine.deviceAttached ? (machine.deviceAttached.name || machine.deviceAttached.deviceId) : 'No sensor attached'}
           </div>
         </div>
-        <div className={`px-2 py-1 rounded text-[10px] font-bold uppercase tracking-widest ${isCritical ? 'bg-error text-on-error animate-pulse' : machine.isCalibrated ? 'bg-green-500/20 text-green-400' : 'bg-warning/20 text-warning'}`}>
-          {isCritical ? 'Maintenance Required' : machine.isCalibrated ? 'Calibrated' : 'Needs Baseline'}
+        <div className={`px-2 py-1 rounded text-[10px] font-bold uppercase tracking-widest ${
+          isCritical 
+            ? 'bg-error text-on-error animate-pulse' 
+            : machine.status === 'scheduled_off'
+            ? 'bg-zinc-500/30 text-zinc-400'
+            : machine.isCalibrated 
+            ? 'bg-green-500/20 text-green-400' 
+            : 'bg-warning/20 text-warning'
+        }`}>
+          {isCritical 
+            ? 'Maintenance Required' 
+            : machine.status === 'scheduled_off'
+            ? 'Scheduled Off'
+            : machine.isCalibrated 
+            ? 'Calibrated' 
+            : 'Needs Baseline'}
         </div>
       </div>
+
+      {machine.calibrationError && (
+        <div className="p-sm bg-error/10 border border-error/30 rounded-lg text-error text-[12px] font-medium flex items-center gap-xs relative z-10">
+          <span className="material-symbols-outlined text-[18px] shrink-0 text-error animate-pulse">error</span>
+          <span>Calibration failed: {machine.calibrationError}</span>
+        </div>
+      )}
       
       {machine.isCalibrated && (
         <div className="grid grid-cols-4 gap-xs mt-xs p-sm bg-surface-container-low rounded-lg border border-white/5 relative z-10">
@@ -111,6 +148,16 @@ const MachineCard = ({ machine, onRefresh }) => {
           >
             <span className="material-symbols-outlined text-[16px]">build</span>
             Reset
+          </button>
+        )}
+        
+        {machine.status !== 'scheduled_off' && machine.deviceAttached && (
+          <button 
+            onClick={handleTurnOff}
+            className="flex-1 bg-warning/20 hover:bg-warning/30 text-warning border border-warning/50 font-label text-label uppercase tracking-widest py-sm rounded-lg transition-colors flex items-center justify-center gap-xs"
+          >
+            <span className="material-symbols-outlined text-[16px]">power_settings_new</span>
+            Turn Off
           </button>
         )}
         

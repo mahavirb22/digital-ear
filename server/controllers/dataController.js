@@ -5,9 +5,24 @@ const Subscription = require('../models/Subscription');
 const Device = require('../models/Device');
 const { analyzeReading } = require('../services/anomalyDetector');
 
+const lastNotificationTimes = {};
+
+const normalizeVibration = (vibration) => {
+  if (vibration === 'DETECTED' || vibration === 'NORMAL') {
+    return vibration;
+  }
+  const val = Number(vibration);
+  if (!isNaN(val)) {
+    return val > 0 ? 'DETECTED' : 'NORMAL';
+  }
+  return vibration;
+};
+
 exports.saveReading = async (req, res) => {
   try {
-    const { deviceId, soundEnergy, frequency, vibration, current } = req.body;
+    let { deviceId, soundEnergy, frequency, vibration, current } = req.body;
+    vibration = normalizeVibration(vibration);
+    req.body.vibration = vibration;
 
     // Check if device is registered
     const device = await Device.findOne({ deviceId }).populate('attachedMachine');
@@ -76,25 +91,39 @@ exports.saveReading = async (req, res) => {
     device.status = analysis.isAnomaly ? 'anomaly' : 'online';
     await device.save();
 
-    // Create notification if anomaly detected
-    if (analysis.isAnomaly && analysis.reasons.length > 0) {
-      const message = `Anomaly on ${deviceId}: ${analysis.reasons.join(', ')}`;
-      
-      const notification = new Notification({
-        deviceId,
-        message,
-        severity: analysis.severity
+    if (analysis.zeroDriftAdjustment !== null && analysis.zeroDriftAdjustment !== undefined) {
+      const Machine = require('../models/Machine');
+      await Machine.findByIdAndUpdate(device.attachedMachine._id, {
+        'baseline.current': analysis.zeroDriftAdjustment
       });
-      await notification.save();
+      device.attachedMachine.baseline.current = analysis.zeroDriftAdjustment;
+    }
 
-      // Send push notifications
-      const subscriptions = await Subscription.find({});
-      try {
-        const payload = JSON.stringify({ title: 'System Alert', body: message });
-        const pushPromises = subscriptions.map(sub => webpush.sendNotification(sub, payload).catch(() => {}));
-        await Promise.all(pushPromises);
-      } catch (pushError) {
-        console.error('Push notification error:', pushError.message);
+    // Create notification if anomaly detected
+    const isCalibratedMachine = device.attachedMachine && device.attachedMachine.isCalibrated;
+    if (analysis.isAnomaly && analysis.reasons.length > 0 && !isCalibratedMachine) {
+      const nowMs = Date.now();
+      const lastTime = lastNotificationTimes[deviceId] || 0;
+      if (nowMs - lastTime > 5 * 60 * 1000) {
+        lastNotificationTimes[deviceId] = nowMs;
+        const message = `Anomaly on ${deviceId}: ${analysis.reasons.join(', ')}`;
+        
+        const notification = new Notification({
+          deviceId,
+          message,
+          severity: analysis.severity
+        });
+        await notification.save();
+
+        // Send push notifications
+        const subscriptions = await Subscription.find({});
+        try {
+          const payload = JSON.stringify({ title: 'System Alert', body: message });
+          const pushPromises = subscriptions.map(sub => webpush.sendNotification(sub, payload).catch(() => {}));
+          await Promise.all(pushPromises);
+        } catch (pushError) {
+          console.error('Push notification error:', pushError.message);
+        }
       }
     }
 
@@ -184,6 +213,64 @@ exports.getDevices = async (req, res) => {
     res.status(200).json(devices);
   } catch (error) {
     console.error('Error fetching devices:', error);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+};
+
+exports.saveBatchReadings = async (req, res) => {
+  try {
+    const { deviceId, readings } = req.body;
+    if (!deviceId || !Array.isArray(readings) || readings.length === 0) {
+      return res.status(400).json({ error: 'Invalid batch payload' });
+    }
+
+    const device = await Device.findOne({ deviceId }).populate('attachedMachine');
+    if (!device) {
+      return res.status(404).json({ error: `Device ${deviceId} is not registered.` });
+    }
+
+    // Process backdated timestamps based on 1 reading per second
+    const now = new Date();
+    const isCalibrated = device.attachedMachine && device.attachedMachine.isCalibrated;
+    const machineBaseline = isCalibrated ? device.attachedMachine.baseline : null;
+    
+    // Process in order, oldest first. Assuming array is oldest to newest.
+    // If we assume 1 sec interval, we can just assign timestamps.
+    const total = readings.length;
+    let anyAnomaly = false;
+
+    for (let i = 0; i < total; i++) {
+      const reading = readings[i];
+      reading.vibration = normalizeVibration(reading.vibration);
+      const ageVal = typeof reading.age === 'number' ? reading.age : (total - 1 - i);
+      const timestamp = new Date(now.getTime() - (ageVal * 1000));
+      
+      let isAnomaly = false;
+      if (isCalibrated) {
+        const analysis = await analyzeReading({ deviceId, ...reading }, machineBaseline);
+        isAnomaly = analysis.isAnomaly;
+        if (isAnomaly) anyAnomaly = true;
+      }
+      
+      const newReading = new SensorReading({
+        deviceId,
+        soundEnergy: reading.soundEnergy,
+        frequency: reading.frequency,
+        vibration: reading.vibration,
+        current: reading.current,
+        isAnomaly,
+        timestamp
+      });
+      await newReading.save();
+    }
+
+    device.lastSeen = now;
+    device.status = anyAnomaly ? 'anomaly' : 'online';
+    await device.save();
+
+    res.status(200).json({ message: `Batch of ${total} readings saved successfully`, count: total });
+  } catch (error) {
+    console.error('Error saving batch readings:', error);
     res.status(500).json({ error: 'Internal Server Error' });
   }
 };

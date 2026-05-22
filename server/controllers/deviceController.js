@@ -47,10 +47,23 @@ exports.removeDevice = async (req, res) => {
     await SensorReading.deleteMany({ deviceId });
     await Notification.deleteMany({ deviceId });
 
-    // Detach from any machine
+    // Detach from any machine and force auto-decalibration
     await Machine.updateMany(
       { deviceAttached: device._id },
-      { $set: { deviceAttached: null } }
+      { 
+        $set: { 
+          deviceAttached: null,
+          isCalibrated: false,
+          calibrationStatus: 'none',
+          calibrationError: null,
+          baseline: {
+            soundEnergy: 0,
+            frequency: 0,
+            vibrationLevel: 0,
+            current: 0
+          }
+        } 
+      }
     );
 
     res.json({ message: 'Device and its data removed successfully' });
@@ -89,25 +102,34 @@ exports.checkStoppages = async (req, res) => {
 
     // Create notifications for stoppages
     for (const stoppage of stoppages) {
-      const recentNotif = await Notification.findOne({
-        deviceId: stoppage.deviceId,
-        message: { $regex: /stopped sending data/ },
-        timestamp: { $gte: new Date(Date.now() - 30000) } // Don't spam — only if not notified in last 30s
-      });
+      // Check if machine was scheduled off
+      const device = await Device.findOne({ deviceId: stoppage.deviceId }).populate('attachedMachine');
+      const isScheduledOff = device && device.attachedMachine && device.attachedMachine.status === 'scheduled_off';
 
-      if (!recentNotif) {
-        await new Notification({
+      if (!isScheduledOff) {
+        const machineName = device && device.attachedMachine ? device.attachedMachine.name : stoppage.deviceId;
+        const message = `Unexpected Power Loss / Breaker Tripped on Machine ${machineName}!`;
+
+        const recentNotif = await Notification.findOne({
           deviceId: stoppage.deviceId,
-          message: stoppage.message,
-          severity: 'critical'
-        }).save();
+          message: { $regex: /Unexpected Power Loss/ },
+          timestamp: { $gte: new Date(Date.now() - 30000) } // Don't spam — only if not notified in last 30s
+        });
 
-        // Mark device as offline
-        await Device.findOneAndUpdate(
-          { deviceId: stoppage.deviceId },
-          { status: 'offline' }
-        );
+        if (!recentNotif) {
+          await new Notification({
+            deviceId: stoppage.deviceId,
+            message,
+            severity: 'critical'
+          }).save();
+        }
       }
+
+      // Mark device as offline (always, regardless of scheduled_off status)
+      await Device.findOneAndUpdate(
+        { deviceId: stoppage.deviceId },
+        { status: 'offline' }
+      );
     }
 
     res.json({ stoppages });
