@@ -66,7 +66,7 @@ function computeStats(values) {
  */
 async function getMLPrediction(reading, machineName) {
   if (!machineName) return null; // Need machine name for per-machine model
-  
+
   try {
     const res = await axios.post(
       `${ML_SERVICE_URL}/machine/${machineName}/predict`,
@@ -151,7 +151,7 @@ async function analyzeReading(
   reading,
   machineBaseline = null,
   machineStatus = "running",
-  machineName = null
+  machineName = null,
 ) {
   const { deviceId, soundEnergy, frequency, current, vibration } = reading;
 
